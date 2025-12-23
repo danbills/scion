@@ -1,0 +1,87 @@
+package config
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"testing"
+)
+
+func TestGetGlobalDir(t *testing.T) {
+	tmpHome := t.TempDir()
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpHome)
+	defer os.Setenv("HOME", origHome)
+
+	dir, err := GetGlobalDir()
+	if err != nil {
+		t.Fatalf("GetGlobalDir failed: %v", err)
+	}
+	expected := filepath.Join(tmpHome, GlobalDir)
+	if dir != expected {
+		t.Errorf("expected %q, got %q", expected, dir)
+	}
+}
+
+func TestGetGroveName(t *testing.T) {
+	tmpDir := t.TempDir()
+	
+	tests := []struct {
+		path string
+		want string
+	}{
+		{filepath.Join(tmpDir, "My Project", ".scion"), "my-project"},
+		{filepath.Join(tmpDir, "simple", ".scion"), "simple"},
+		{filepath.Join(tmpDir, "CamelCase", ".scion"), "camelcase"},
+	}
+
+	for _, tt := range tests {
+		if err := os.MkdirAll(tt.path, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if got := GetGroveName(tt.path); got != tt.want {
+			t.Errorf("GetGroveName(%q) = %q, want %q", tt.path, got, tt.want)
+		}
+	}
+}
+
+// Helper to init a git repo
+func initGitRepo(t *testing.T, dir string) {
+	cmd := exec.Command("git", "init")
+	cmd.Dir = dir
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("git init failed: %v", err)
+	}
+}
+
+func TestGetRepoDir(t *testing.T) {
+	// 1. Not a git repo
+	nonRepo := t.TempDir()
+	origWd, _ := os.Getwd()
+	defer os.Chdir(origWd)
+	
+	os.Chdir(nonRepo)
+	if _, ok := GetRepoDir(); ok {
+		t.Error("GetRepoDir should return false when not in a git repo")
+	}
+
+	// 2. Git repo with .scion
+	repo := t.TempDir()
+	initGitRepo(t, repo)
+	scionDir := filepath.Join(repo, ".scion")
+	os.Mkdir(scionDir, 0755)
+
+	os.Chdir(repo)
+	got, ok := GetRepoDir()
+	if !ok {
+		t.Error("GetRepoDir should return true in git repo with .scion")
+	}
+	
+	// Evaluate symlinks for comparison (macOS /var/folders issue)
+	evalGot, _ := filepath.EvalSymlinks(got)
+	evalScion, _ := filepath.EvalSymlinks(scionDir)
+	
+	if evalGot != evalScion {
+		t.Errorf("expected %q, got %q", evalScion, evalGot)
+	}
+}

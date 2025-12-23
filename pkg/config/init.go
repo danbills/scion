@@ -7,65 +7,23 @@ import (
 	"path/filepath"
 )
 
-//go:embed scion_hook.py
+//go:embed embeds/scion_hook.py
 var DefaultScionHookPy string
 
-const DefaultSettingsJSON = `{
-  "yolo": true,
-  "security": {
-    "auth": {
-      "selectedType": "gemini-api-key"
-    }
-  },
-	"telemetry": {
-    "enabled": false
-  },
-	"general": {
-    "disableAutoUpdate": true,
-    "disableUpdateNag": true,
-    "previewFeatures": true
-  },
-	"ui": {
-    "accessibility": {
-      "disableLoadingPhrases": true
-    },
-    "hideFooter": true,
-    "hideWindowTitle": true
-  },
-	"tools": {
-	    "enableHooks": true,
-	    "enableMessageBusIntegration": true
-	},
-  "hooks": {
-    "SessionStart": [{"matcher": "*", "hooks": [{"name": "scion-status", "type": "command", "command": "python3 $HOME/scion_hook.py"}]}],
-    "SessionEnd": [{"matcher": "*", "hooks": [{"name": "scion-status", "type": "command", "command": "python3 $HOME/scion_hook.py"}]}],
-    "BeforeAgent": [{"matcher": "*", "hooks": [{"name": "scion-status", "type": "command", "command": "python3 $HOME/scion_hook.py"}]}],
-    "AfterAgent": [{"matcher": "*", "hooks": [{"name": "scion-status", "type": "command", "command": "python3 $HOME/scion_hook.py"}]}],
-    "BeforeTool": [{"matcher": "*", "hooks": [{"name": "scion-status", "type": "command", "command": "python3 $HOME/scion_hook.py"}]}],
-    "AfterTool": [{"matcher": "*", "hooks": [{"name": "scion-status", "type": "command", "command": "python3 $HOME/scion_hook.py"}]}],
-    "Notification": [{"matcher": "ToolPermission", "hooks": [{"name": "scion-status", "type": "command", "command": "python3 $HOME/scion_hook.py"}]}]
-  }
-}
-`
+//go:embed embeds/settings.json
+var DefaultSettingsJSON string
 
-const DefaultSystemPrompt = `
-# Placeholder
-`
+//go:embed embeds/system_prompt.md
+var DefaultSystemPrompt string
 
-const DefaultScionJSON = `{
-  "unix_username": "node",
-  "image": "gemini-cli-sandbox",
-  "use_tmux": true,
-  "model": "flash"
-}
-`
+//go:embed embeds/scion.json
+var DefaultScionJSON string
 
-const DefaultGeminiMD = `## Placeholder
-`
+//go:embed embeds/gemini.md
+var DefaultGeminiMD string
 
-const DefaultBashrc = `# scion agent bashrc
-alias g="gemini"
-`
+//go:embed embeds/bashrc
+var DefaultBashrc string
 
 func InitProject(targetDir string) error {
 	var projectDir string
@@ -109,7 +67,7 @@ func InitProject(targetDir string) error {
 		{filepath.Join(defaultTemplateDir, "scion_hook.py"), DefaultScionHookPy},
 		{filepath.Join(defaultTemplateDir, ".gemini", "settings.json"), DefaultSettingsJSON},
 		{filepath.Join(defaultTemplateDir, ".gemini", "system_prompt.md"), DefaultSystemPrompt},
-		{filepath.Join(defaultTemplateDir, "gemini.md"), DefaultGeminiMD},
+		{filepath.Join(defaultTemplateDir, ".gemini", "gemini.md"), DefaultGeminiMD},
 		{filepath.Join(defaultTemplateDir, ".bashrc"), DefaultBashrc},
 	}
 

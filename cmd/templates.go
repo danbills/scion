@@ -78,11 +78,30 @@ var templatesCreateCmd = &cobra.Command{
 	},
 }
 
+var templatesDeleteCmd = &cobra.Command{
+	Use:     "delete <name>",
+	Aliases: []string{"rm"},
+	Short:   "Delete a template",
+	Args:    cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		name := args[0]
+		global, _ := cmd.Flags().GetBool("global")
+		err := config.DeleteTemplate(name, global)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Template %s deleted successfully.\n", name)
+		return nil
+	},
+}
+
 func init() {
 	rootCmd.AddCommand(templatesCmd)
 	templatesCmd.AddCommand(templatesListCmd)
 	templatesCmd.AddCommand(templatesShowCmd)
 	templatesCmd.AddCommand(templatesCreateCmd)
+	templatesCmd.AddCommand(templatesDeleteCmd)
 
 	templatesCreateCmd.Flags().Bool("global", false, "Create a global template")
+	templatesDeleteCmd.Flags().Bool("global", false, "Delete a global template")
 }

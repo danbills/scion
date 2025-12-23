@@ -74,3 +74,68 @@ func TestCreateTemplate(t *testing.T) {
 		t.Error("expected error when creating duplicate template, got nil")
 	}
 }
+
+func TestDeleteTemplate(t *testing.T) {
+	// Setup a temporary directory for the test
+	tmpDir, err := os.MkdirTemp("", "scion-test-delete-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Override home dir for global templates
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
+	// Create a mock project structure
+	projectDir := filepath.Join(tmpDir, "project", DotScion)
+	if err := os.MkdirAll(projectDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Helper to change current working directory
+	origWd, _ := os.Getwd()
+	defer os.Chdir(origWd)
+	if err := os.Chdir(filepath.Dir(projectDir)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create templates to delete
+	tplName := "test-tpl-delete"
+	if err := CreateTemplate(tplName, false); err != nil {
+		t.Fatal(err)
+	}
+	globalTplName := "global-tpl-delete"
+	if err := CreateTemplate(globalTplName, true); err != nil {
+		t.Fatal(err)
+	}
+
+	// Test deleting project template
+	if err := DeleteTemplate(tplName, false); err != nil {
+		t.Fatalf("failed to delete project template: %v", err)
+	}
+	expectedPath := filepath.Join(projectDir, "templates", tplName)
+	if _, err := os.Stat(expectedPath); !os.IsNotExist(err) {
+		t.Errorf("expected template directory %s to be gone", expectedPath)
+	}
+
+	// Test deleting global template
+	if err := DeleteTemplate(globalTplName, true); err != nil {
+		t.Fatalf("failed to delete global template: %v", err)
+	}
+	globalExpectedPath := filepath.Join(tmpDir, GlobalDir, "templates", globalTplName)
+	if _, err := os.Stat(globalExpectedPath); !os.IsNotExist(err) {
+		t.Errorf("expected global template directory %s to be gone", globalExpectedPath)
+	}
+
+	// Test deleting "default" fails
+	if err := DeleteTemplate("default", false); err == nil {
+		t.Error("expected error when deleting default template, got nil")
+	}
+
+	// Test deleting non-existent template fails
+	if err := DeleteTemplate("no-such-template", false); err == nil {
+		t.Error("expected error when deleting non-existent template, got nil")
+	}
+}

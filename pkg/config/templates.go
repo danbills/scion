@@ -117,6 +117,37 @@ func CreateTemplate(name string, global bool) error {
 	return SeedTemplateDir(templateDir, name)
 }
 
+func DeleteTemplate(name string, global bool) error {
+	if name == "default" {
+		return fmt.Errorf("cannot delete the default template")
+	}
+
+	var templatesDir string
+	var err error
+
+	if global {
+		templatesDir, err = GetGlobalTemplatesDir()
+	} else {
+		templatesDir, err = GetProjectTemplatesDir()
+	}
+
+	if err != nil {
+		return err
+	}
+
+	templateDir := filepath.Join(templatesDir, name)
+	if info, err := os.Stat(templateDir); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("template %s not found", name)
+		}
+		return err
+	} else if !info.IsDir() {
+		return fmt.Errorf("%s is not a directory", templateDir)
+	}
+
+	return os.RemoveAll(templateDir)
+}
+
 func ListTemplates() ([]*Template, error) {
 	templates := make(map[string]*Template)
 

@@ -47,10 +47,12 @@ var listCmd = &cobra.Command{
 		if listAll {
 			// This is a bit hard since we don't track all groves
 			// For now, let's at least check current and global
-			if pd, err := config.GetResolvedProjectDir(""); err == nil {
+			pd, _ := config.GetResolvedProjectDir("")
+			gd, _ := config.GetGlobalDir()
+			if pd != "" {
 				grovesToScan = append(grovesToScan, pd)
 			}
-			if gd, err := config.GetGlobalDir(); err == nil {
+			if gd != "" && gd != pd {
 				grovesToScan = append(grovesToScan, gd)
 			}
 		} else {
@@ -88,16 +90,14 @@ var listCmd = &cobra.Command{
 				}
 				var cfg config.ScionConfig
 				if err := json.Unmarshal(data, &cfg); err == nil && cfg.Agent != nil {
-					if cfg.Agent.Status == "created" {
-						agents = append(agents, runtime.AgentInfo{
-							Name:      e.Name(),
-							Template:  cfg.Template,
-							Grove:     groveName,
-							GrovePath: gp,
-							Status:    "created",
-							Image:     cfg.Image,
-						})
-					}
+					agents = append(agents, runtime.AgentInfo{
+						Name:      e.Name(),
+						Template:  cfg.Template,
+						Grove:     groveName,
+						GrovePath: gp,
+						Status:    "created",
+						Image:     cfg.Image,
+					})
 				}
 			}
 		}

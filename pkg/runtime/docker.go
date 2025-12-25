@@ -24,7 +24,7 @@ func (r *DockerRuntime) Run(ctx context.Context, config RunConfig) (string, erro
 
 	// Docker supports --init, which we want to use if possible.
 	// We insert it after 'run'
-	newArgs := []string{"run", "--init"}
+	newArgs := []string{"run", "--init", "-t"}
 	newArgs = append(newArgs, args[1:]...)
 
 	out, err := runSimpleCommand(ctx, r.Command, newArgs...)
@@ -147,4 +147,8 @@ func (r *DockerRuntime) Attach(ctx context.Context, id string) error {
 func (r *DockerRuntime) ImageExists(ctx context.Context, image string) (bool, error) {
 	_, err := runSimpleCommand(ctx, r.Command, "image", "inspect", image)
 	return err == nil, nil
+}
+
+func (r *DockerRuntime) PullImage(ctx context.Context, image string) error {
+	return runInteractiveCommand(r.Command, "pull", image)
 }

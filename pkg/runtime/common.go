@@ -13,7 +13,7 @@ import (
 
 // buildCommonRunArgs constructs the common arguments for 'run' command across different runtimes.
 func buildCommonRunArgs(config RunConfig) ([]string, error) {
-	args := []string{"run", "-d", "-i", "-t"}
+	args := []string{"run", "-d", "-i"}
 	addArg := func(flag string, values ...string) {
 		for _, v := range values {
 			args = append(args, flag, v)
@@ -135,11 +135,16 @@ func buildCommonRunArgs(config RunConfig) ([]string, error) {
 	geminiArgs = append(geminiArgs, "--prompt-interactive", config.Task)
 
 	if config.UseTmux {
-		geminiCmd := strings.Join(geminiArgs, " ")
-		// Re-quote the task for the shell inside tmux
-		geminiCmd = fmt.Sprintf("gemini --yolo %s--prompt-interactive %q", 
-			func() string { if config.Resume { return "--resume " }; return "" }(), 
-			config.Task)
+		var quotedArgs []string
+		for _, a := range geminiArgs {
+			// Use %q to quote arguments that might have spaces or special characters
+			if strings.ContainsAny(a, " \t\n\"'\\$") {
+				quotedArgs = append(quotedArgs, fmt.Sprintf("%q", a))
+			} else {
+				quotedArgs = append(quotedArgs, a)
+			}
+		}
+		geminiCmd := strings.Join(quotedArgs, " ")
 		args = append(args, "tmux", "new-session", "-s", "scion", geminiCmd)
 	} else {
 		args = append(args, geminiArgs...)

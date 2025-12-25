@@ -282,12 +282,18 @@ func RunAgent(cmd *cobra.Command, args []string, resume bool) error {
 			parts := strings.SplitN(resolvedImage, ":", 2)
 			tmuxImage = parts[0] + ":tmux"
 		}
-
-		exists, err := rt.ImageExists(context.Background(), tmuxImage)
-		if err != nil || !exists {
-			return fmt.Errorf("tmux support requested but image '%s' not found. Please ensure the image has a :tmux tag.", tmuxImage)
-		}
 		resolvedImage = tmuxImage
+	}
+
+	exists, err := rt.ImageExists(context.Background(), resolvedImage)
+	if err != nil || !exists {
+		fmt.Printf("Image '%s' not found locally, pulling...\n", resolvedImage)
+		if err := rt.PullImage(context.Background(), resolvedImage); err != nil {
+			if useTmux {
+				return fmt.Errorf("tmux support requested but image '%s' not found and pull failed: %w. Please ensure the image has a :tmux tag.", resolvedImage, err)
+			}
+			return fmt.Errorf("failed to pull image '%s': %w", resolvedImage, err)
+		}
 	}
 
 	agentEnv := []string{

@@ -78,3 +78,7 @@ func (m *MockRuntime) Attach(ctx context.Context, id string) error {
 func (m *MockRuntime) ImageExists(ctx context.Context, image string) (bool, error) {
 	return true, nil
 }
+
+func (m *MockRuntime) PullImage(ctx context.Context, image string) error {
+	return nil
+}

@@ -23,7 +23,13 @@ func (r *AppleContainerRuntime) Run(ctx context.Context, config RunConfig) (stri
 		return "", err
 	}
 
-	out, err := runSimpleCommand(ctx, r.Command, args...)
+	// For Apple Container, we want to ensure -d and -t are present for 'run'
+	// matching the working manual command.
+	newArgs := []string{"run", "-d", "-t"}
+	// Skip the original 'run', '-d', and '-i' from buildCommonRunArgs (indices 0, 1, 2)
+	newArgs = append(newArgs, args[3:]...)
+
+	out, err := runSimpleCommand(ctx, r.Command, newArgs...)
 	if err != nil {
 		return "", fmt.Errorf("container run failed: %w (output: %s)", err, out)
 	}
@@ -145,4 +151,8 @@ func (r *AppleContainerRuntime) Attach(ctx context.Context, id string) error {
 func (r *AppleContainerRuntime) ImageExists(ctx context.Context, image string) (bool, error) {
 	_, err := runSimpleCommand(ctx, r.Command, "image", "inspect", image)
 	return err == nil, nil
+}
+
+func (r *AppleContainerRuntime) PullImage(ctx context.Context, image string) error {
+	return runInteractiveCommand(r.Command, "image", "pull", image)
 }

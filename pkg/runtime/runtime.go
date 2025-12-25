@@ -43,4 +43,5 @@ type Runtime interface {
 	GetLogs(ctx context.Context, id string) (string, error)
 	Attach(ctx context.Context, id string) error
 	ImageExists(ctx context.Context, image string) (bool, error)
+	PullImage(ctx context.Context, image string) error
 }

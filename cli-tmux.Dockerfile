@@ -43,3 +43,4 @@ RUN rm -r /opt/
 ENV PATH=/usr/local/go/bin:$PATH
 
 USER node
+WORKDIR /workspace

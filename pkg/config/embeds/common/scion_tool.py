@@ -13,6 +13,9 @@ def log_event(state, message):
     with open(AGENT_LOG_PATH, "a") as f:
         f.write(f"{timestamp} [{state}] {message}\n")
 
+    if "user" in message.lower() and state not in ["WAITING_FOR_INPUT", "COMPLETED"]:
+        update_status("ACTIVE", session=True)
+
 def update_status(status, session=False):
     data = {}
     if os.path.exists(SCION_JSON_PATH):
@@ -33,10 +36,6 @@ def update_status(status, session=False):
         os.replace(temp_path, SCION_JSON_PATH)
     except Exception as e:
         log_event("ERROR", f"Failed to update {os.path.basename(SCION_JSON_PATH)}: {e}")
-
-def update_session_status(status):
-    # Compatibility wrapper or just use update_status(status, session=True)
-    update_status(status, session=True)
 
 def ask_user(message):
     update_status("WAITING_FOR_INPUT", session=True)

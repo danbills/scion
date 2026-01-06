@@ -15,7 +15,7 @@ func TestBuildAgentEnv(t *testing.T) {
 	scionCfg := &api.ScionConfig{
 		Env: map[string]string{
 			"NORMAL_KEY":    "normal-value",
-			"INHERITED_KEY": "",
+			"INHERITED_KEY": "${INHERITED_KEY}",
 		},
 	}
 

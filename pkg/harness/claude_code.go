@@ -3,6 +3,7 @@ package harness
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,6 +39,7 @@ func (c *ClaudeCode) GetCommand(task string, resume bool, baseArgs []string) []s
 		args = append(args, "--continue")
 		if task != "" {
 			// TODO: Research how to pass a prompt when resuming in Claude
+			fmt.Fprintf(os.Stderr, "Warning: Passing a prompt when resuming is not yet supported for Claude. The prompt '%s' will be ignored.\n", task)
 		}
 	}
 	args = append(args, baseArgs...)

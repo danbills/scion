@@ -102,23 +102,6 @@ Then checks for any git worktree checked out to the specified branch.`,
 	},
 }
 
-func resolveAgentWorkspace(agentDir string) string {
-	scionAgentPath := filepath.Join(agentDir, "scion-agent.json")
-	if _, err := os.Stat(scionAgentPath); err != nil {
-		return ""
-	}
-
-	tpl := &config.Template{Path: agentDir}
-	if cfg, err := tpl.LoadConfig(); err == nil {
-		for _, v := range cfg.Volumes {
-			if v.Target == "/workspace" {
-				return v.Source
-			}
-		}
-	}
-	return ""
-}
-
 func init() {
 	rootCmd.AddCommand(cdwCmd)
 }

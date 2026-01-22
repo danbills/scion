@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gettext \
     ncurses-term \
     ca-certificates \
+    gnupg \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Go
@@ -34,6 +35,9 @@ RUN ARCH=$(dpkg --print-architecture) && \
 RUN mkdir -p -m 755 /etc/apt/keyrings && \
     wget -qO- https://cli.github.com/packages/githubcli-archive-keyring.gpg > /etc/apt/keyrings/githubcli-archive-keyring.gpg
 
+# Download gcsfuse GPG key
+RUN curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg
+
 # Install Git from source
 WORKDIR /opt
 RUN wget https://www.kernel.org/pub/software/scm/git/git-2.52.0.tar.gz
@@ -47,11 +51,12 @@ FROM ${BASE_IMAGE}
 USER root
 
 COPY --from=builder /etc/apt/keyrings/githubcli-archive-keyring.gpg /etc/apt/keyrings/githubcli-archive-keyring.gpg
+COPY --from=builder /usr/share/keyrings/cloud.google.gpg /usr/share/keyrings/cloud.google.gpg
 RUN echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list
 
-# Install gcsfuse
-RUN curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg && \
-    . /etc/os-release && \
+# Setup gcsfuse repository
+
+RUN . /etc/os-release && \
     echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt gcsfuse-${VERSION_CODENAME} main" | tee /etc/apt/sources.list.d/gcsfuse.list
 
 # Install runtime dependencies for Git and Tmux
@@ -91,9 +96,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     nano \
     vim \
     python3-venv \
+    lsb-release \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Setup GCS-FUSE
+RUN GCSFUSE_REPO=gcsfuse-`lsb_release -c -s` && echo "deb [signed-by=/usr/share/keyrings/cloud.google.asc] https://packages.cloud.google.com/apt $GCSFUSE_REPO main" | sudo tee /etc/apt/sources.list.d/gcsfuse.list
+RUN curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo tee /usr/share/keyrings/cloud.google.asc
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
     gcsfuse \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
 
 # Copy artifacts from builder
 COPY --from=builder /usr/local/go /usr/local/go
@@ -106,7 +121,7 @@ RUN mkdir -p /usr/local/share/npm-global \
     && chown -R node:node /usr/local/share/npm-global
 ENV NPM_CONFIG_PREFIX=/usr/local/share/npm-global
 ENV PATH=/usr/local/share/npm-global/bin:/usr/local/go/bin:$PATH
-ENV LC_ALL C.UTF-8
+ENV LC_ALL=C.UTF-8
 
 USER node
 

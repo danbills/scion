@@ -1,7 +1,7 @@
 /**
  * 404 Not Found page component
  *
- * Displayed when a route is not found
+ * Displayed when a route is not found, uses Shoelace components
  */
 
 import { LitElement, html, css } from 'lit';
@@ -56,10 +56,10 @@ export class ScionPage404 extends LitElement {
     }
 
     .path {
-      font-family: monospace;
-      background: var(--scion-bg, #f8fafc);
+      font-family: var(--scion-font-mono, monospace);
+      background: var(--scion-bg-subtle, #f1f5f9);
       padding: 0.25rem 0.5rem;
-      border-radius: 0.25rem;
+      border-radius: var(--scion-radius-sm, 0.25rem);
       font-size: 0.875rem;
     }
 
@@ -70,39 +70,17 @@ export class ScionPage404 extends LitElement {
       flex-wrap: wrap;
     }
 
-    .btn {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.5rem;
-      padding: 0.75rem 1.5rem;
-      border-radius: 0.5rem;
+    sl-button::part(base) {
       font-weight: 500;
-      text-decoration: none;
-      transition: all 0.15s ease;
     }
 
-    .btn-primary {
-      background: var(--scion-primary, #3b82f6);
-      color: white;
+    .illustration {
+      margin-bottom: 1.5rem;
     }
 
-    .btn-primary:hover {
-      background: var(--scion-primary-hover, #2563eb);
-    }
-
-    .btn-secondary {
-      background: var(--scion-surface, #ffffff);
-      color: var(--scion-text, #1e293b);
-      border: 1px solid var(--scion-border, #e2e8f0);
-    }
-
-    .btn-secondary:hover {
-      background: var(--scion-bg, #f8fafc);
-    }
-
-    .btn svg {
-      width: 1.25rem;
-      height: 1.25rem;
+    .illustration sl-icon {
+      font-size: 6rem;
+      color: var(--scion-neutral-300, #cbd5e1);
     }
   `;
 
@@ -111,6 +89,9 @@ export class ScionPage404 extends LitElement {
 
     return html`
       <div class="container">
+        <div class="illustration">
+          <sl-icon name="emoji-frown"></sl-icon>
+        </div>
         <div class="code">404</div>
         <h1>Page Not Found</h1>
         <p>
@@ -118,45 +99,21 @@ export class ScionPage404 extends LitElement {
           <span class="path">${requestedPath}</span> doesn't exist.
         </p>
         <div class="actions">
-          <a href="/" class="btn btn-primary"> ${this.renderIcon('home')} Back to Dashboard </a>
-          <a href="javascript:history.back()" class="btn btn-secondary">
-            ${this.renderIcon('arrow-left')} Go Back
-          </a>
+          <sl-button variant="primary" href="/">
+            <sl-icon slot="prefix" name="house"></sl-icon>
+            Back to Dashboard
+          </sl-button>
+          <sl-button variant="default" @click=${(): void => this.handleGoBack()}>
+            <sl-icon slot="prefix" name="arrow-left"></sl-icon>
+            Go Back
+          </sl-button>
         </div>
       </div>
     `;
   }
 
-  private renderIcon(name: string) {
-    const icons: Record<string, unknown> = {
-      home: html`<svg
-        xmlns="http://www.w3.org/2000/svg"
-        fill="none"
-        viewBox="0 0 24 24"
-        stroke="currentColor"
-      >
-        <path
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          stroke-width="2"
-          d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"
-        />
-      </svg>`,
-      'arrow-left': html`<svg
-        xmlns="http://www.w3.org/2000/svg"
-        fill="none"
-        viewBox="0 0 24 24"
-        stroke="currentColor"
-      >
-        <path
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          stroke-width="2"
-          d="M10 19l-7-7m0 0l7-7m-7 7h18"
-        />
-      </svg>`,
-    };
-    return icons[name] || html``;
+  private handleGoBack(): void {
+    window.history.back();
   }
 }
 

@@ -1,13 +1,14 @@
 /**
  * Home/Dashboard page component
  *
- * Displays an overview of the system status
+ * Displays an overview of the system status with Shoelace components
  */
 
 import { LitElement, html, css } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 
 import type { PageData } from '../../shared/types.js';
+import '../shared/status-badge.js';
 
 @customElement('scion-page-home')
 export class ScionPageHome extends LitElement {
@@ -23,21 +24,25 @@ export class ScionPageHome extends LitElement {
     }
 
     .hero {
-      background: linear-gradient(135deg, var(--scion-primary, #3b82f6) 0%, #1d4ed8 100%);
+      background: linear-gradient(
+        135deg,
+        var(--scion-primary, #3b82f6) 0%,
+        var(--scion-primary-700, #1d4ed8) 100%
+      );
       color: white;
       padding: 2rem;
-      border-radius: 1rem;
+      border-radius: var(--scion-radius-lg, 0.75rem);
       margin-bottom: 2rem;
     }
 
     .hero h1 {
-      font-size: 2rem;
+      font-size: 1.75rem;
       font-weight: 700;
       margin: 0 0 0.5rem 0;
     }
 
     .hero p {
-      font-size: 1.125rem;
+      font-size: 1rem;
       opacity: 0.9;
       margin: 0;
     }
@@ -51,9 +56,10 @@ export class ScionPageHome extends LitElement {
 
     .stat-card {
       background: var(--scion-surface, #ffffff);
-      border-radius: 0.75rem;
+      border-radius: var(--scion-radius-lg, 0.75rem);
       padding: 1.5rem;
-      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+      box-shadow: var(--scion-shadow, 0 1px 3px rgba(0, 0, 0, 0.1));
+      border: 1px solid var(--scion-border, #e2e8f0);
     }
 
     .stat-card h3 {
@@ -67,19 +73,15 @@ export class ScionPageHome extends LitElement {
       font-size: 2rem;
       font-weight: 700;
       color: var(--scion-text, #1e293b);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
     }
 
     .stat-change {
       font-size: 0.875rem;
       margin-top: 0.5rem;
-    }
-
-    .stat-change.positive {
-      color: #10b981;
-    }
-
-    .stat-change.negative {
-      color: #ef4444;
+      color: var(--scion-text-muted, #64748b);
     }
 
     .section-title {
@@ -91,55 +93,123 @@ export class ScionPageHome extends LitElement {
 
     .quick-actions {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
       gap: 1rem;
     }
 
     .action-card {
       background: var(--scion-surface, #ffffff);
       border: 1px solid var(--scion-border, #e2e8f0);
-      border-radius: 0.75rem;
+      border-radius: var(--scion-radius-lg, 0.75rem);
       padding: 1.25rem;
       display: flex;
       align-items: center;
       gap: 1rem;
       cursor: pointer;
-      transition: all 0.15s ease;
+      transition: all var(--scion-transition-fast, 150ms ease);
       text-decoration: none;
       color: inherit;
     }
 
     .action-card:hover {
       border-color: var(--scion-primary, #3b82f6);
-      box-shadow: 0 4px 12px rgba(59, 130, 246, 0.15);
+      box-shadow: var(--scion-shadow-md, 0 4px 6px -1px rgba(0, 0, 0, 0.1));
+      transform: translateY(-2px);
     }
 
     .action-icon {
-      width: 2.5rem;
-      height: 2.5rem;
-      border-radius: 0.5rem;
-      background: var(--scion-bg, #f8fafc);
+      width: 3rem;
+      height: 3rem;
+      border-radius: var(--scion-radius, 0.5rem);
+      background: var(--scion-primary-50, #eff6ff);
       display: flex;
       align-items: center;
       justify-content: center;
       color: var(--scion-primary, #3b82f6);
+      flex-shrink: 0;
     }
 
-    .action-icon svg {
-      width: 1.25rem;
-      height: 1.25rem;
+    .action-icon sl-icon {
+      font-size: 1.5rem;
     }
 
     .action-text h4 {
-      font-size: 0.9375rem;
+      font-size: 1rem;
       font-weight: 600;
       margin: 0 0 0.25rem 0;
+      color: var(--scion-text, #1e293b);
     }
 
     .action-text p {
-      font-size: 0.8125rem;
+      font-size: 0.875rem;
       color: var(--scion-text-muted, #64748b);
       margin: 0;
+    }
+
+    /* Recent activity section */
+    .activity-section {
+      margin-top: 2rem;
+    }
+
+    .activity-list {
+      background: var(--scion-surface, #ffffff);
+      border: 1px solid var(--scion-border, #e2e8f0);
+      border-radius: var(--scion-radius-lg, 0.75rem);
+      overflow: hidden;
+    }
+
+    .activity-item {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      padding: 1rem 1.25rem;
+      border-bottom: 1px solid var(--scion-border, #e2e8f0);
+    }
+
+    .activity-item:last-child {
+      border-bottom: none;
+    }
+
+    .activity-icon {
+      width: 2.5rem;
+      height: 2.5rem;
+      border-radius: 50%;
+      background: var(--scion-bg-subtle, #f1f5f9);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--scion-text-muted, #64748b);
+      flex-shrink: 0;
+    }
+
+    .activity-content {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .activity-title {
+      font-size: 0.875rem;
+      font-weight: 500;
+      color: var(--scion-text, #1e293b);
+      margin: 0;
+    }
+
+    .activity-time {
+      font-size: 0.75rem;
+      color: var(--scion-text-muted, #64748b);
+      margin-top: 0.125rem;
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 3rem 2rem;
+      color: var(--scion-text-muted, #64748b);
+    }
+
+    .empty-state sl-icon {
+      font-size: 3rem;
+      margin-bottom: 1rem;
+      opacity: 0.5;
     }
   `;
 
@@ -155,8 +225,12 @@ export class ScionPageHome extends LitElement {
       <div class="stats">
         <div class="stat-card">
           <h3>Active Agents</h3>
-          <div class="stat-value">--</div>
-          <div class="stat-change positive">Ready for work</div>
+          <div class="stat-value">
+            <span>--</span>
+          </div>
+          <div class="stat-change">
+            <scion-status-badge status="success" label="Ready" size="small"></scion-status-badge>
+          </div>
         </div>
         <div class="stat-card">
           <h3>Groves</h3>
@@ -166,11 +240,13 @@ export class ScionPageHome extends LitElement {
         <div class="stat-card">
           <h3>Tasks Completed</h3>
           <div class="stat-value">--</div>
-          <div class="stat-change positive">This week</div>
+          <div class="stat-change">This week</div>
         </div>
         <div class="stat-card">
           <h3>System Status</h3>
-          <div class="stat-value" style="color: #10b981;">Healthy</div>
+          <div class="stat-value">
+            <scion-status-badge status="healthy" size="large" label="Healthy"></scion-status-badge>
+          </div>
           <div class="stat-change">All systems operational</div>
         </div>
       </div>
@@ -178,68 +254,48 @@ export class ScionPageHome extends LitElement {
       <h2 class="section-title">Quick Actions</h2>
       <div class="quick-actions">
         <a href="/agents" class="action-card">
-          <div class="action-icon">${this.renderIcon('plus')}</div>
+          <div class="action-icon">
+            <sl-icon name="plus-lg"></sl-icon>
+          </div>
           <div class="action-text">
             <h4>Create Agent</h4>
             <p>Spin up a new AI agent</p>
           </div>
         </a>
         <a href="/groves" class="action-card">
-          <div class="action-icon">${this.renderIcon('folder')}</div>
+          <div class="action-icon">
+            <sl-icon name="folder"></sl-icon>
+          </div>
           <div class="action-text">
             <h4>View Groves</h4>
             <p>Browse project workspaces</p>
           </div>
         </a>
         <a href="/agents" class="action-card">
-          <div class="action-icon">${this.renderIcon('terminal')}</div>
+          <div class="action-icon">
+            <sl-icon name="terminal"></sl-icon>
+          </div>
           <div class="action-text">
             <h4>Open Terminal</h4>
             <p>Connect to running agent</p>
           </div>
         </a>
       </div>
-    `;
-  }
 
-  private renderIcon(name: string) {
-    const icons: Record<string, unknown> = {
-      plus: html`<svg
-        xmlns="http://www.w3.org/2000/svg"
-        fill="none"
-        viewBox="0 0 24 24"
-        stroke="currentColor"
-      >
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-      </svg>`,
-      folder: html`<svg
-        xmlns="http://www.w3.org/2000/svg"
-        fill="none"
-        viewBox="0 0 24 24"
-        stroke="currentColor"
-      >
-        <path
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          stroke-width="2"
-          d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"
-        />
-      </svg>`,
-      terminal: html`<svg
-        xmlns="http://www.w3.org/2000/svg"
-        fill="none"
-        viewBox="0 0 24 24"
-        stroke="currentColor"
-      >
-        <path
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          stroke-width="2"
-          d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
-        />
-      </svg>`,
-    };
-    return icons[name] || html``;
+      <div class="activity-section">
+        <h2 class="section-title">Recent Activity</h2>
+        <div class="activity-list">
+          <div class="empty-state">
+            <sl-icon name="clock-history"></sl-icon>
+            <p>No recent activity to display.<br />Start by creating your first agent.</p>
+            <sl-button variant="primary" href="/agents" style="margin-top: 1rem;">
+              <sl-icon slot="prefix" name="plus-lg"></sl-icon>
+              Create Agent
+            </sl-button>
+          </div>
+        </div>
+      </div>
+    `;
   }
 }
 

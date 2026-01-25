@@ -10,7 +10,16 @@
 import type { PageData } from '../shared/types.js';
 
 // Import all components for client-side hydration and routing
+// App shell (imports shared components internally)
 import '../components/app-shell.js';
+
+// Shared components (also imported by app-shell, but explicit for clarity)
+import '../components/shared/nav.js';
+import '../components/shared/header.js';
+import '../components/shared/breadcrumb.js';
+import '../components/shared/status-badge.js';
+
+// Page components
 import '../components/pages/home.js';
 import '../components/pages/not-found.js';
 
@@ -28,7 +37,13 @@ async function init(): Promise<void> {
 
   // Wait for custom elements to be defined
   await Promise.all([
+    // Core components
     customElements.whenDefined('scion-app'),
+    customElements.whenDefined('scion-nav'),
+    customElements.whenDefined('scion-header'),
+    customElements.whenDefined('scion-breadcrumb'),
+    customElements.whenDefined('scion-status-badge'),
+    // Page components
     customElements.whenDefined('scion-page-home'),
     customElements.whenDefined('scion-page-404'),
   ]);

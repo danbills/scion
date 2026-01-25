@@ -13,7 +13,17 @@ import { getHtmlTemplate, getPageTitle } from './templates.js';
 
 // Import components for server-side rendering
 // These must be imported so they're registered before rendering
+
+// App shell (imports shared components internally)
 import '../../components/app-shell.js';
+
+// Shared components (explicit imports for SSR registration)
+import '../../components/shared/nav.js';
+import '../../components/shared/header.js';
+import '../../components/shared/breadcrumb.js';
+import '../../components/shared/status-badge.js';
+
+// Page components
 import '../../components/pages/home.js';
 import '../../components/pages/not-found.js';
 

@@ -1,0 +1,294 @@
+/**
+ * Header Component
+ *
+ * Provides the top header bar with breadcrumb, user menu, and actions
+ */
+
+import { LitElement, html, css } from 'lit';
+import { customElement, property, state } from 'lit/decorators.js';
+
+import type { User } from '../../shared/types.js';
+
+@customElement('scion-header')
+export class ScionHeader extends LitElement {
+  /**
+   * Current authenticated user
+   */
+  @property({ type: Object })
+  accessor user: User | null = null;
+
+  /**
+   * Current page path for breadcrumb
+   */
+  @property({ type: String })
+  accessor currentPath = '/';
+
+  /**
+   * Page title to display
+   */
+  @property({ type: String })
+  accessor pageTitle = 'Dashboard';
+
+  /**
+   * Whether to show the mobile menu button
+   */
+  @property({ type: Boolean })
+  accessor showMobileMenu = false;
+
+  /**
+   * Whether user menu is open
+   */
+  @state()
+  accessor _menuOpen = false;
+
+  static override styles = css`
+    :host {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: var(--scion-header-height, 60px);
+      padding: 0 1.5rem;
+      background: var(--scion-surface, #ffffff);
+      border-bottom: 1px solid var(--scion-border, #e2e8f0);
+    }
+
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    .mobile-menu-btn {
+      display: none;
+      padding: 0.5rem;
+      background: transparent;
+      border: none;
+      border-radius: 0.375rem;
+      cursor: pointer;
+      color: var(--scion-text, #1e293b);
+    }
+
+    .mobile-menu-btn:hover {
+      background: var(--scion-bg-subtle, #f1f5f9);
+    }
+
+    @media (max-width: 768px) {
+      .mobile-menu-btn {
+        display: flex;
+      }
+    }
+
+    .page-title {
+      font-size: 1.125rem;
+      font-weight: 600;
+      color: var(--scion-text, #1e293b);
+      margin: 0;
+    }
+
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    @media (max-width: 640px) {
+      .header-actions {
+        display: none;
+      }
+    }
+
+    .user-section {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .user-name {
+      font-size: 0.875rem;
+      font-weight: 500;
+      color: var(--scion-text, #1e293b);
+    }
+
+    @media (max-width: 640px) {
+      .user-name {
+        display: none;
+      }
+    }
+
+    .sign-in-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 1rem;
+      border-radius: 0.5rem;
+      background: var(--scion-primary, #3b82f6);
+      color: white;
+      text-decoration: none;
+      font-size: 0.875rem;
+      font-weight: 500;
+      transition: background 0.15s ease;
+    }
+
+    .sign-in-link:hover {
+      background: var(--scion-primary-hover, #2563eb);
+    }
+
+    /* User dropdown styles */
+    .user-dropdown {
+      position: relative;
+    }
+
+    .user-button {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.25rem;
+      background: transparent;
+      border: none;
+      border-radius: 9999px;
+      cursor: pointer;
+      transition: background 0.15s ease;
+    }
+
+    .user-button:hover {
+      background: var(--scion-bg-subtle, #f1f5f9);
+    }
+
+    .user-avatar {
+      --size: 2rem;
+    }
+
+    .dropdown-icon {
+      font-size: 0.75rem;
+      color: var(--scion-text-muted, #64748b);
+      transition: transform 0.15s ease;
+    }
+
+    .user-dropdown[open] .dropdown-icon {
+      transform: rotate(180deg);
+    }
+  `;
+
+  override render() {
+    return html`
+      <div class="header-left">
+        ${this.showMobileMenu
+          ? html`
+              <button
+                class="mobile-menu-btn"
+                @click=${(): void => this.handleMobileMenuClick()}
+                aria-label="Open navigation menu"
+              >
+                <sl-icon name="list" style="font-size: 1.25rem;"></sl-icon>
+              </button>
+            `
+          : ''}
+        <h1 class="page-title">${this.pageTitle}</h1>
+      </div>
+
+      <div class="header-right">
+        <div class="header-actions">
+          <sl-tooltip content="Notifications">
+            <sl-icon-button name="bell" label="Notifications"></sl-icon-button>
+          </sl-tooltip>
+          <sl-tooltip content="Help">
+            <sl-icon-button name="question-circle" label="Help"></sl-icon-button>
+          </sl-tooltip>
+        </div>
+
+        <div class="user-section">${this.renderUserSection()}</div>
+      </div>
+    `;
+  }
+
+  private renderUserSection() {
+    if (!this.user) {
+      return html`
+        <a href="/auth/login" class="sign-in-link">
+          <sl-icon name="box-arrow-in-right"></sl-icon>
+          Sign in
+        </a>
+      `;
+    }
+
+    const initials = this.getInitials(this.user.name);
+
+    return html`
+      <span class="user-name">${this.user.name}</span>
+      <sl-dropdown class="user-dropdown" placement="bottom-end">
+        <button slot="trigger" class="user-button" aria-label="User menu">
+          <sl-avatar
+            class="user-avatar"
+            initials="${initials}"
+            image="${this.user.avatar || ''}"
+            label="${this.user.name}"
+          ></sl-avatar>
+          <sl-icon name="chevron-down" class="dropdown-icon"></sl-icon>
+        </button>
+        <sl-menu>
+          <sl-menu-item>
+            <sl-icon slot="prefix" name="person"></sl-icon>
+            Profile
+          </sl-menu-item>
+          <sl-menu-item>
+            <sl-icon slot="prefix" name="gear"></sl-icon>
+            Settings
+          </sl-menu-item>
+          <sl-divider></sl-divider>
+          <sl-menu-item @click=${(): void => this.handleLogout()}>
+            <sl-icon slot="prefix" name="box-arrow-right"></sl-icon>
+            Sign out
+          </sl-menu-item>
+        </sl-menu>
+      </sl-dropdown>
+    `;
+  }
+
+  /**
+   * Get initials from user name
+   */
+  private getInitials(name: string): string {
+    return name
+      .split(' ')
+      .map((n) => n[0])
+      .join('')
+      .toUpperCase()
+      .slice(0, 2);
+  }
+
+  /**
+   * Handle mobile menu button click
+   */
+  private handleMobileMenuClick(): void {
+    this.dispatchEvent(
+      new CustomEvent('mobile-menu-toggle', {
+        bubbles: true,
+        composed: true,
+      })
+    );
+  }
+
+  /**
+   * Handle logout action
+   */
+  private handleLogout(): void {
+    this.dispatchEvent(
+      new CustomEvent('logout', {
+        bubbles: true,
+        composed: true,
+      })
+    );
+  }
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    'scion-header': ScionHeader;
+  }
+}

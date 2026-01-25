@@ -68,10 +68,20 @@ web/
 │   ├── client/           # Browser-side code
 │   │   └── main.ts       # Client entry point (hydration)
 │   ├── components/       # Lit web components
+│   │   ├── index.ts      # Component exports
 │   │   ├── app-shell.ts  # Main application shell
+│   │   ├── shared/       # Reusable UI components
+│   │   │   ├── index.ts      # Shared component exports
+│   │   │   ├── nav.ts        # Sidebar navigation
+│   │   │   ├── header.ts     # Top header bar
+│   │   │   ├── breadcrumb.ts # Breadcrumb navigation
+│   │   │   └── status-badge.ts # Status indicator badges
 │   │   └── pages/        # Page components
 │   │       ├── home.ts   # Dashboard page
 │   │       └── not-found.ts # 404 page
+│   ├── styles/           # CSS theme and utilities
+│   │   ├── theme.css     # CSS custom properties, light/dark mode
+│   │   └── utilities.css # Utility classes
 │   └── shared/           # Shared types between server/client
 │       └── types.ts      # Type definitions
 ├── public/               # Static assets
@@ -106,7 +116,7 @@ Track implementation progress in the [frontend milestones](../.design/hosted/fro
 Current status:
 - ✅ **M1: Koa Server Foundation** - Complete
 - ✅ **M2: Lit SSR Integration** - Complete
-- ⬜ M3: Web Awesome Component Library
+- ✅ **M3: Web Awesome Component Library** - Complete
 - ⬜ M4: Authentication Flow
 - ⬜ M5: Hub API Proxy
 - ⬜ M6: Grove & Agent Pages
@@ -176,3 +186,78 @@ throw new HttpError(404, 'Resource not found', 'NOT_FOUND');
 - Use declarative shadow DOM (`<template shadowroot="open">`)
 - Initial data is serialized in `<script id="__SCION_DATA__">` tag
 - Client hydrates components and sets up routing on load
+
+## Shoelace Component Library
+
+The application uses [Shoelace](https://shoelace.style/) for UI components. Shoelace is loaded from CDN in the HTML template.
+
+### Using Shoelace Components
+
+```typescript
+// Use Shoelace components directly in Lit templates
+render() {
+  return html`
+    <sl-button variant="primary" @click=${() => this.handleClick()}>
+      <sl-icon slot="prefix" name="plus-lg"></sl-icon>
+      Create Agent
+    </sl-button>
+
+    <sl-badge variant="success">Running</sl-badge>
+
+    <sl-dropdown>
+      <sl-button slot="trigger">Menu</sl-button>
+      <sl-menu>
+        <sl-menu-item>Option 1</sl-menu-item>
+        <sl-menu-item>Option 2</sl-menu-item>
+      </sl-menu>
+    </sl-dropdown>
+  `;
+}
+```
+
+### Using Shared Scion Components
+
+```typescript
+import '../shared/status-badge.js';
+
+render() {
+  return html`
+    <scion-status-badge status="running" size="small"></scion-status-badge>
+    <scion-status-badge status="error" label="Failed"></scion-status-badge>
+  `;
+}
+```
+
+### Theme Variables
+
+Use CSS custom properties with the `--scion-` prefix for consistent theming:
+
+```css
+:host {
+  background: var(--scion-surface);
+  color: var(--scion-text);
+  border: 1px solid var(--scion-border);
+  border-radius: var(--scion-radius);
+}
+
+.primary-action {
+  background: var(--scion-primary);
+  color: white;
+}
+
+.primary-action:hover {
+  background: var(--scion-primary-hover);
+}
+```
+
+### Dark Mode
+
+Dark mode is handled automatically via CSS custom properties. The theme toggle in the navigation saves the preference to localStorage. Components should use the semantic color variables (e.g., `--scion-surface`, `--scion-text`) which automatically adjust for dark mode.
+
+### Adding a Shared Component
+
+1. Create component in `src/components/shared/`
+2. Export from `src/components/shared/index.ts`
+3. Import in `src/server/ssr/renderer.ts` for SSR
+4. Import in `src/client/main.ts` for hydration
+5. Add to `customElements.whenDefined()` list in client main.ts

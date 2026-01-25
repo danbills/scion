@@ -26,6 +26,7 @@
     "@koa/cors": "^5.0.0",
     "@koa/router": "^13.0.0",
     "@lit-labs/ssr": "^3.2.2",
+    "@shoelace-style/shoelace": "^2.19.0",
     "@vaadin/router": "^1.7.5",
     "koa": "^2.16.0",
     "koa-static": "^5.0.0",

@@ -13,22 +13,6 @@ const (
 	GlobalDir = ".scion"
 )
 
-// GetRepoDir returns the .scion directory at the root of the git repo, if it exists.
-func GetRepoDir() (string, bool) {
-	if !util.IsGitRepo() {
-		return "", false
-	}
-	root, err := util.RepoRoot()
-	if err != nil {
-		return "", false
-	}
-	p := filepath.Join(root, DotScion)
-	if info, err := os.Stat(p); err == nil && info.IsDir() {
-		return p, true
-	}
-	return "", false
-}
-
 // FindProjectRoot walks up the directory tree to find the .scion directory.
 func FindProjectRoot() (string, bool) {
 	wd, err := os.Getwd()
@@ -56,26 +40,10 @@ func FindProjectRoot() (string, bool) {
 }
 
 // GetResolvedProjectDir returns the active .scion directory based on precedence.
+// This is a convenience wrapper around ResolveGrovePath that discards the isGlobal flag.
 func GetResolvedProjectDir(explicitPath string) (string, error) {
-	// 1. Explicitly provided via flag
-	if explicitPath != "" {
-		if explicitPath == "home" || explicitPath == "global" {
-			return GetGlobalDir()
-		}
-		abs, err := filepath.Abs(explicitPath)
-		if err != nil {
-			return "", err
-		}
-		return abs, nil
-	}
-
-	// 2. Walk up to find .scion (covers repo root and current dir cases)
-	if p, ok := FindProjectRoot(); ok {
-		return p, nil
-	}
-
-	// 3. Fallback to global
-	return GetGlobalDir()
+	path, _, err := ResolveGrovePath(explicitPath)
+	return path, err
 }
 
 func GetProjectDir() (string, error) {

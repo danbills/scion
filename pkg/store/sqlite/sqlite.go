@@ -53,6 +53,7 @@ func (s *SQLiteStore) Migrate(ctx context.Context) error {
 		migrationV2,
 		migrationV3,
 		migrationV4,
+		migrationV5,
 	}
 
 	// Create migrations table if not exists
@@ -278,6 +279,73 @@ CREATE TABLE IF NOT EXISTS secrets (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_secrets_key_scope ON secrets(key, scope, scope_id);
 CREATE INDEX IF NOT EXISTS idx_secrets_scope ON secrets(scope, scope_id);
+`
+
+// Migration V5: Groups and Policies (Hub Permissions System)
+const migrationV5 = `
+-- Groups table
+CREATE TABLE IF NOT EXISTS groups (
+	id TEXT PRIMARY KEY,
+	name TEXT NOT NULL,
+	slug TEXT UNIQUE NOT NULL,
+	description TEXT,
+	parent_id TEXT REFERENCES groups(id) ON DELETE SET NULL,
+	labels TEXT,
+	annotations TEXT,
+	created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	created_by TEXT,
+	owner_id TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_groups_slug ON groups(slug);
+CREATE INDEX IF NOT EXISTS idx_groups_parent ON groups(parent_id);
+CREATE INDEX IF NOT EXISTS idx_groups_owner ON groups(owner_id);
+
+-- Group members table (users and nested groups)
+CREATE TABLE IF NOT EXISTS group_members (
+	group_id TEXT NOT NULL,
+	member_type TEXT NOT NULL,  -- 'user' or 'group'
+	member_id TEXT NOT NULL,
+	role TEXT NOT NULL DEFAULT 'member',
+	added_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	added_by TEXT,
+	PRIMARY KEY (group_id, member_type, member_id),
+	FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_group_members_member ON group_members(member_type, member_id);
+
+-- Policies table
+CREATE TABLE IF NOT EXISTS policies (
+	id TEXT PRIMARY KEY,
+	name TEXT NOT NULL,
+	description TEXT,
+	scope_type TEXT NOT NULL,
+	scope_id TEXT,
+	resource_type TEXT NOT NULL DEFAULT '*',
+	resource_id TEXT,
+	actions TEXT NOT NULL,  -- JSON array
+	effect TEXT NOT NULL,
+	conditions TEXT,        -- JSON object
+	priority INTEGER NOT NULL DEFAULT 0,
+	labels TEXT,
+	annotations TEXT,
+	created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	created_by TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_policies_scope ON policies(scope_type, scope_id);
+CREATE INDEX IF NOT EXISTS idx_policies_effect ON policies(effect);
+CREATE INDEX IF NOT EXISTS idx_policies_priority ON policies(priority DESC);
+
+-- Policy bindings table
+CREATE TABLE IF NOT EXISTS policy_bindings (
+	policy_id TEXT NOT NULL,
+	principal_type TEXT NOT NULL,  -- 'user' or 'group'
+	principal_id TEXT NOT NULL,
+	PRIMARY KEY (policy_id, principal_type, principal_id),
+	FOREIGN KEY (policy_id) REFERENCES policies(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_policy_bindings_principal ON policy_bindings(principal_type, principal_id);
 `
 
 // Helper functions for JSON marshaling/unmarshaling
@@ -1987,6 +2055,681 @@ func (s *SQLiteStore) GetSecretValue(ctx context.Context, key, scope, scopeID st
 	}
 
 	return encryptedValue, nil
+}
+
+// ============================================================================
+// Group Operations
+// ============================================================================
+
+func (s *SQLiteStore) CreateGroup(ctx context.Context, group *store.Group) error {
+	now := time.Now()
+	group.Created = now
+	group.Updated = now
+
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO groups (id, name, slug, description, parent_id, labels, annotations, created_at, updated_at, created_by, owner_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`,
+		group.ID, group.Name, group.Slug, group.Description, nullableString(group.ParentID),
+		marshalJSON(group.Labels), marshalJSON(group.Annotations),
+		group.Created, group.Updated, group.CreatedBy, group.OwnerID,
+	)
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return store.ErrAlreadyExists
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *SQLiteStore) GetGroup(ctx context.Context, id string) (*store.Group, error) {
+	group := &store.Group{}
+	var labels, annotations string
+	var parentID sql.NullString
+
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, name, slug, description, parent_id, labels, annotations, created_at, updated_at, created_by, owner_id
+		FROM groups WHERE id = ?
+	`, id).Scan(
+		&group.ID, &group.Name, &group.Slug, &group.Description, &parentID,
+		&labels, &annotations,
+		&group.Created, &group.Updated, &group.CreatedBy, &group.OwnerID,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, store.ErrNotFound
+		}
+		return nil, err
+	}
+
+	if parentID.Valid {
+		group.ParentID = parentID.String
+	}
+	unmarshalJSON(labels, &group.Labels)
+	unmarshalJSON(annotations, &group.Annotations)
+
+	return group, nil
+}
+
+func (s *SQLiteStore) GetGroupBySlug(ctx context.Context, slug string) (*store.Group, error) {
+	var id string
+	err := s.db.QueryRowContext(ctx, "SELECT id FROM groups WHERE slug = ?", slug).Scan(&id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, store.ErrNotFound
+		}
+		return nil, err
+	}
+	return s.GetGroup(ctx, id)
+}
+
+func (s *SQLiteStore) UpdateGroup(ctx context.Context, group *store.Group) error {
+	group.Updated = time.Now()
+
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE groups SET
+			name = ?, slug = ?, description = ?, parent_id = ?,
+			labels = ?, annotations = ?,
+			updated_at = ?, owner_id = ?
+		WHERE id = ?
+	`,
+		group.Name, group.Slug, group.Description, nullableString(group.ParentID),
+		marshalJSON(group.Labels), marshalJSON(group.Annotations),
+		group.Updated, group.OwnerID,
+		group.ID,
+	)
+	if err != nil {
+		return err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
+func (s *SQLiteStore) DeleteGroup(ctx context.Context, id string) error {
+	result, err := s.db.ExecContext(ctx, "DELETE FROM groups WHERE id = ?", id)
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
+func (s *SQLiteStore) ListGroups(ctx context.Context, filter store.GroupFilter, opts store.ListOptions) (*store.ListResult[store.Group], error) {
+	var conditions []string
+	var args []interface{}
+
+	if filter.OwnerID != "" {
+		conditions = append(conditions, "owner_id = ?")
+		args = append(args, filter.OwnerID)
+	}
+	if filter.ParentID != "" {
+		conditions = append(conditions, "parent_id = ?")
+		args = append(args, filter.ParentID)
+	}
+
+	whereClause := ""
+	if len(conditions) > 0 {
+		whereClause = "WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	var totalCount int
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM groups %s", whereClause)
+	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&totalCount); err != nil {
+		return nil, err
+	}
+
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id, name, slug, description, parent_id, labels, annotations, created_at, updated_at, created_by, owner_id
+		FROM groups %s ORDER BY created_at DESC LIMIT ?
+	`, whereClause)
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var groups []store.Group
+	for rows.Next() {
+		var group store.Group
+		var labels, annotations string
+		var parentID sql.NullString
+
+		if err := rows.Scan(
+			&group.ID, &group.Name, &group.Slug, &group.Description, &parentID,
+			&labels, &annotations,
+			&group.Created, &group.Updated, &group.CreatedBy, &group.OwnerID,
+		); err != nil {
+			return nil, err
+		}
+
+		if parentID.Valid {
+			group.ParentID = parentID.String
+		}
+		unmarshalJSON(labels, &group.Labels)
+		unmarshalJSON(annotations, &group.Annotations)
+
+		groups = append(groups, group)
+	}
+
+	return &store.ListResult[store.Group]{
+		Items:      groups,
+		TotalCount: totalCount,
+	}, nil
+}
+
+func (s *SQLiteStore) AddGroupMember(ctx context.Context, member *store.GroupMember) error {
+	if member.AddedAt.IsZero() {
+		member.AddedAt = time.Now()
+	}
+
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO group_members (group_id, member_type, member_id, role, added_at, added_by)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`,
+		member.GroupID, member.MemberType, member.MemberID, member.Role, member.AddedAt, member.AddedBy,
+	)
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") || strings.Contains(err.Error(), "PRIMARY KEY constraint failed") {
+			return store.ErrAlreadyExists
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *SQLiteStore) RemoveGroupMember(ctx context.Context, groupID, memberType, memberID string) error {
+	result, err := s.db.ExecContext(ctx,
+		"DELETE FROM group_members WHERE group_id = ? AND member_type = ? AND member_id = ?",
+		groupID, memberType, memberID,
+	)
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
+func (s *SQLiteStore) GetGroupMembers(ctx context.Context, groupID string) ([]store.GroupMember, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT group_id, member_type, member_id, role, added_at, added_by
+		FROM group_members WHERE group_id = ?
+	`, groupID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var members []store.GroupMember
+	for rows.Next() {
+		var member store.GroupMember
+		if err := rows.Scan(
+			&member.GroupID, &member.MemberType, &member.MemberID, &member.Role, &member.AddedAt, &member.AddedBy,
+		); err != nil {
+			return nil, err
+		}
+		members = append(members, member)
+	}
+
+	return members, nil
+}
+
+func (s *SQLiteStore) GetUserGroups(ctx context.Context, userID string) ([]store.GroupMember, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT group_id, member_type, member_id, role, added_at, added_by
+		FROM group_members WHERE member_type = 'user' AND member_id = ?
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var memberships []store.GroupMember
+	for rows.Next() {
+		var member store.GroupMember
+		if err := rows.Scan(
+			&member.GroupID, &member.MemberType, &member.MemberID, &member.Role, &member.AddedAt, &member.AddedBy,
+		); err != nil {
+			return nil, err
+		}
+		memberships = append(memberships, member)
+	}
+
+	return memberships, nil
+}
+
+func (s *SQLiteStore) GetGroupMembership(ctx context.Context, groupID, memberType, memberID string) (*store.GroupMember, error) {
+	member := &store.GroupMember{}
+
+	err := s.db.QueryRowContext(ctx, `
+		SELECT group_id, member_type, member_id, role, added_at, added_by
+		FROM group_members WHERE group_id = ? AND member_type = ? AND member_id = ?
+	`, groupID, memberType, memberID).Scan(
+		&member.GroupID, &member.MemberType, &member.MemberID, &member.Role, &member.AddedAt, &member.AddedBy,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, store.ErrNotFound
+		}
+		return nil, err
+	}
+
+	return member, nil
+}
+
+// WouldCreateCycle checks if adding memberGroupID as a member of groupID would create a cycle.
+// A cycle exists if groupID is reachable from memberGroupID by following the containment relationship.
+// Example: if A contains B, and we try to add A as member of B, we'd have A->B->A (cycle).
+func (s *SQLiteStore) WouldCreateCycle(ctx context.Context, groupID, memberGroupID string) (bool, error) {
+	// If they're the same, it's a direct cycle
+	if groupID == memberGroupID {
+		return true, nil
+	}
+
+	// Check if groupID is reachable from memberGroupID by traversing DOWN the containment graph
+	// (i.e., checking what groups memberGroupID contains, and what those contain, etc.)
+	visited := make(map[string]bool)
+	return s.hasPathDown(ctx, memberGroupID, groupID, visited)
+}
+
+// hasPathDown checks if 'target' is reachable from 'current' by following containment.
+// It looks at what groups 'current' contains as members.
+func (s *SQLiteStore) hasPathDown(ctx context.Context, current, target string, visited map[string]bool) (bool, error) {
+	if current == target {
+		return true, nil
+	}
+	if visited[current] {
+		return false, nil
+	}
+	visited[current] = true
+
+	// Get all groups that 'current' contains (groups where current is the group_id)
+	rows, err := s.db.QueryContext(ctx,
+		"SELECT member_id FROM group_members WHERE member_type = 'group' AND group_id = ?", current)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var childGroupID string
+		if err := rows.Scan(&childGroupID); err != nil {
+			return false, err
+		}
+		found, err := s.hasPathDown(ctx, childGroupID, target, visited)
+		if err != nil {
+			return false, err
+		}
+		if found {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+// GetEffectiveGroups returns all groups a user belongs to, including transitive memberships.
+func (s *SQLiteStore) GetEffectiveGroups(ctx context.Context, userID string) ([]string, error) {
+	// Start with direct group memberships
+	directMemberships, err := s.GetUserGroups(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	effectiveGroups := make(map[string]bool)
+	for _, m := range directMemberships {
+		effectiveGroups[m.GroupID] = true
+		// Add transitive group memberships
+		if err := s.addTransitiveGroups(ctx, m.GroupID, effectiveGroups); err != nil {
+			return nil, err
+		}
+	}
+
+	result := make([]string, 0, len(effectiveGroups))
+	for groupID := range effectiveGroups {
+		result = append(result, groupID)
+	}
+
+	return result, nil
+}
+
+// addTransitiveGroups recursively adds all groups that contain the given group.
+func (s *SQLiteStore) addTransitiveGroups(ctx context.Context, groupID string, visited map[string]bool) error {
+	// Find all groups where this group is a member
+	rows, err := s.db.QueryContext(ctx,
+		"SELECT group_id FROM group_members WHERE member_type = 'group' AND member_id = ?", groupID)
+	if err != nil {
+		return err
+	}
+
+	// Collect all parent group IDs first, then close rows before recursing
+	// This avoids issues with SQLite connections during recursive queries
+	var parentGroupIDs []string
+	for rows.Next() {
+		var parentGroupID string
+		if err := rows.Scan(&parentGroupID); err != nil {
+			rows.Close()
+			return err
+		}
+		parentGroupIDs = append(parentGroupIDs, parentGroupID)
+	}
+	rows.Close()
+
+	// Now recurse after rows are closed
+	for _, parentGroupID := range parentGroupIDs {
+		if !visited[parentGroupID] {
+			visited[parentGroupID] = true
+			if err := s.addTransitiveGroups(ctx, parentGroupID, visited); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// ============================================================================
+// Policy Operations
+// ============================================================================
+
+func (s *SQLiteStore) CreatePolicy(ctx context.Context, policy *store.Policy) error {
+	now := time.Now()
+	policy.Created = now
+	policy.Updated = now
+
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO policies (id, name, description, scope_type, scope_id, resource_type, resource_id, actions, effect, conditions, priority, labels, annotations, created_at, updated_at, created_by)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`,
+		policy.ID, policy.Name, policy.Description, policy.ScopeType, policy.ScopeID,
+		policy.ResourceType, policy.ResourceID,
+		marshalJSON(policy.Actions), policy.Effect, marshalJSON(policy.Conditions),
+		policy.Priority, marshalJSON(policy.Labels), marshalJSON(policy.Annotations),
+		policy.Created, policy.Updated, policy.CreatedBy,
+	)
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return store.ErrAlreadyExists
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *SQLiteStore) GetPolicy(ctx context.Context, id string) (*store.Policy, error) {
+	policy := &store.Policy{}
+	var actions, conditions, labels, annotations string
+
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, name, description, scope_type, scope_id, resource_type, resource_id, actions, effect, conditions, priority, labels, annotations, created_at, updated_at, created_by
+		FROM policies WHERE id = ?
+	`, id).Scan(
+		&policy.ID, &policy.Name, &policy.Description, &policy.ScopeType, &policy.ScopeID,
+		&policy.ResourceType, &policy.ResourceID,
+		&actions, &policy.Effect, &conditions,
+		&policy.Priority, &labels, &annotations,
+		&policy.Created, &policy.Updated, &policy.CreatedBy,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, store.ErrNotFound
+		}
+		return nil, err
+	}
+
+	unmarshalJSON(actions, &policy.Actions)
+	unmarshalJSON(conditions, &policy.Conditions)
+	unmarshalJSON(labels, &policy.Labels)
+	unmarshalJSON(annotations, &policy.Annotations)
+
+	return policy, nil
+}
+
+func (s *SQLiteStore) UpdatePolicy(ctx context.Context, policy *store.Policy) error {
+	policy.Updated = time.Now()
+
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE policies SET
+			name = ?, description = ?, scope_type = ?, scope_id = ?,
+			resource_type = ?, resource_id = ?,
+			actions = ?, effect = ?, conditions = ?,
+			priority = ?, labels = ?, annotations = ?,
+			updated_at = ?
+		WHERE id = ?
+	`,
+		policy.Name, policy.Description, policy.ScopeType, policy.ScopeID,
+		policy.ResourceType, policy.ResourceID,
+		marshalJSON(policy.Actions), policy.Effect, marshalJSON(policy.Conditions),
+		policy.Priority, marshalJSON(policy.Labels), marshalJSON(policy.Annotations),
+		policy.Updated,
+		policy.ID,
+	)
+	if err != nil {
+		return err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
+func (s *SQLiteStore) DeletePolicy(ctx context.Context, id string) error {
+	result, err := s.db.ExecContext(ctx, "DELETE FROM policies WHERE id = ?", id)
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
+func (s *SQLiteStore) ListPolicies(ctx context.Context, filter store.PolicyFilter, opts store.ListOptions) (*store.ListResult[store.Policy], error) {
+	var conditions []string
+	var args []interface{}
+
+	if filter.ScopeType != "" {
+		conditions = append(conditions, "scope_type = ?")
+		args = append(args, filter.ScopeType)
+	}
+	if filter.ScopeID != "" {
+		conditions = append(conditions, "scope_id = ?")
+		args = append(args, filter.ScopeID)
+	}
+	if filter.ResourceType != "" {
+		conditions = append(conditions, "resource_type = ?")
+		args = append(args, filter.ResourceType)
+	}
+	if filter.Effect != "" {
+		conditions = append(conditions, "effect = ?")
+		args = append(args, filter.Effect)
+	}
+
+	whereClause := ""
+	if len(conditions) > 0 {
+		whereClause = "WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	var totalCount int
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM policies %s", whereClause)
+	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&totalCount); err != nil {
+		return nil, err
+	}
+
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id, name, description, scope_type, scope_id, resource_type, resource_id, actions, effect, conditions, priority, labels, annotations, created_at, updated_at, created_by
+		FROM policies %s ORDER BY priority DESC, created_at DESC LIMIT ?
+	`, whereClause)
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var policies []store.Policy
+	for rows.Next() {
+		var policy store.Policy
+		var actions, conditions, labels, annotations string
+
+		if err := rows.Scan(
+			&policy.ID, &policy.Name, &policy.Description, &policy.ScopeType, &policy.ScopeID,
+			&policy.ResourceType, &policy.ResourceID,
+			&actions, &policy.Effect, &conditions,
+			&policy.Priority, &labels, &annotations,
+			&policy.Created, &policy.Updated, &policy.CreatedBy,
+		); err != nil {
+			return nil, err
+		}
+
+		unmarshalJSON(actions, &policy.Actions)
+		unmarshalJSON(conditions, &policy.Conditions)
+		unmarshalJSON(labels, &policy.Labels)
+		unmarshalJSON(annotations, &policy.Annotations)
+
+		policies = append(policies, policy)
+	}
+
+	return &store.ListResult[store.Policy]{
+		Items:      policies,
+		TotalCount: totalCount,
+	}, nil
+}
+
+func (s *SQLiteStore) AddPolicyBinding(ctx context.Context, binding *store.PolicyBinding) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO policy_bindings (policy_id, principal_type, principal_id)
+		VALUES (?, ?, ?)
+	`,
+		binding.PolicyID, binding.PrincipalType, binding.PrincipalID,
+	)
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") || strings.Contains(err.Error(), "PRIMARY KEY constraint failed") {
+			return store.ErrAlreadyExists
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *SQLiteStore) RemovePolicyBinding(ctx context.Context, policyID, principalType, principalID string) error {
+	result, err := s.db.ExecContext(ctx,
+		"DELETE FROM policy_bindings WHERE policy_id = ? AND principal_type = ? AND principal_id = ?",
+		policyID, principalType, principalID,
+	)
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
+func (s *SQLiteStore) GetPolicyBindings(ctx context.Context, policyID string) ([]store.PolicyBinding, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT policy_id, principal_type, principal_id
+		FROM policy_bindings WHERE policy_id = ?
+	`, policyID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var bindings []store.PolicyBinding
+	for rows.Next() {
+		var binding store.PolicyBinding
+		if err := rows.Scan(&binding.PolicyID, &binding.PrincipalType, &binding.PrincipalID); err != nil {
+			return nil, err
+		}
+		bindings = append(bindings, binding)
+	}
+
+	return bindings, nil
+}
+
+func (s *SQLiteStore) GetPoliciesForPrincipal(ctx context.Context, principalType, principalID string) ([]store.Policy, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT p.id, p.name, p.description, p.scope_type, p.scope_id, p.resource_type, p.resource_id, p.actions, p.effect, p.conditions, p.priority, p.labels, p.annotations, p.created_at, p.updated_at, p.created_by
+		FROM policies p
+		INNER JOIN policy_bindings pb ON p.id = pb.policy_id
+		WHERE pb.principal_type = ? AND pb.principal_id = ?
+		ORDER BY p.priority DESC, p.created_at DESC
+	`, principalType, principalID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var policies []store.Policy
+	for rows.Next() {
+		var policy store.Policy
+		var actions, conditions, labels, annotations string
+
+		if err := rows.Scan(
+			&policy.ID, &policy.Name, &policy.Description, &policy.ScopeType, &policy.ScopeID,
+			&policy.ResourceType, &policy.ResourceID,
+			&actions, &policy.Effect, &conditions,
+			&policy.Priority, &labels, &annotations,
+			&policy.Created, &policy.Updated, &policy.CreatedBy,
+		); err != nil {
+			return nil, err
+		}
+
+		unmarshalJSON(actions, &policy.Actions)
+		unmarshalJSON(conditions, &policy.Conditions)
+		unmarshalJSON(labels, &policy.Labels)
+		unmarshalJSON(annotations, &policy.Annotations)
+
+		policies = append(policies, policy)
+	}
+
+	return policies, nil
 }
 
 // Ensure SQLiteStore implements Store interface

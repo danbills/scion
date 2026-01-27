@@ -263,6 +263,12 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/env/", s.handleEnvVarByKey)
 	s.mux.HandleFunc("/api/v1/secrets", s.handleSecrets)
 	s.mux.HandleFunc("/api/v1/secrets/", s.handleSecretByKey)
+
+	// Groups and Policies (Hub Permissions System)
+	s.mux.HandleFunc("/api/v1/groups", s.handleGroups)
+	s.mux.HandleFunc("/api/v1/groups/", s.handleGroupRoutes)
+	s.mux.HandleFunc("/api/v1/policies", s.handlePolicies)
+	s.mux.HandleFunc("/api/v1/policies/", s.handlePolicyRoutes)
 }
 
 // applyMiddleware wraps the handler with middleware.

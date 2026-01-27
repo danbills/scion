@@ -348,6 +348,131 @@ const (
 )
 
 // =============================================================================
+// Groups and Policies (Hub Permissions System)
+// =============================================================================
+
+// Group represents a user group in the Hub database.
+// Groups support hierarchical membership through nested groups.
+type Group struct {
+	// Identity
+	ID          string `json:"id"`          // UUID primary key
+	Name        string `json:"name"`        // Human-friendly display name
+	Slug        string `json:"slug"`        // URL-safe identifier
+	Description string `json:"description,omitempty"`
+
+	// Hierarchy
+	ParentID string `json:"parentId,omitempty"` // Optional parent group for hierarchy
+
+	// Metadata (stored as JSON)
+	Labels      map[string]string `json:"labels,omitempty"`
+	Annotations map[string]string `json:"annotations,omitempty"`
+
+	// Timestamps
+	Created time.Time `json:"created"`
+	Updated time.Time `json:"updated"`
+
+	// Ownership
+	CreatedBy string `json:"createdBy,omitempty"`
+	OwnerID   string `json:"ownerId,omitempty"`
+}
+
+// GroupMember represents membership in a group.
+// Members can be either users or other groups (for nested group support).
+type GroupMember struct {
+	GroupID    string    `json:"groupId"`    // The group this membership belongs to
+	MemberType string    `json:"memberType"` // "user" or "group"
+	MemberID   string    `json:"memberId"`   // User ID or Group ID
+	Role       string    `json:"role"`       // "member", "admin", "owner"
+	AddedAt    time.Time `json:"addedAt"`
+	AddedBy    string    `json:"addedBy,omitempty"`
+}
+
+// GroupMemberType constants
+const (
+	GroupMemberTypeUser  = "user"
+	GroupMemberTypeGroup = "group"
+)
+
+// GroupMemberRole constants
+const (
+	GroupMemberRoleMember = "member"
+	GroupMemberRoleAdmin  = "admin"
+	GroupMemberRoleOwner  = "owner"
+)
+
+// Policy defines access control rules in the Hub.
+// Policies specify what actions are allowed or denied on resources.
+type Policy struct {
+	// Identity
+	ID          string `json:"id"`                    // UUID primary key
+	Name        string `json:"name"`                  // Human-friendly name
+	Description string `json:"description,omitempty"` // Detailed description
+
+	// Scope
+	ScopeType string `json:"scopeType"` // "hub", "grove", "resource"
+	ScopeID   string `json:"scopeId"`   // ID of the scoped entity (empty for hub scope)
+
+	// Resource targeting
+	ResourceType string `json:"resourceType"`         // "*" for all, or specific type (agent, grove, etc.)
+	ResourceID   string `json:"resourceId,omitempty"` // Specific resource ID (optional)
+
+	// Permissions
+	Actions []string `json:"actions"` // Actions like "read", "write", "delete", "*"
+	Effect  string   `json:"effect"`  // "allow" or "deny"
+
+	// Conditions (stored as JSON)
+	Conditions *PolicyConditions `json:"conditions,omitempty"`
+
+	// Priority for conflict resolution (higher = evaluated first)
+	Priority int `json:"priority"`
+
+	// Metadata (stored as JSON)
+	Labels      map[string]string `json:"labels,omitempty"`
+	Annotations map[string]string `json:"annotations,omitempty"`
+
+	// Timestamps
+	Created time.Time `json:"created"`
+	Updated time.Time `json:"updated"`
+
+	// Ownership
+	CreatedBy string `json:"createdBy,omitempty"`
+}
+
+// PolicyConditions provides optional conditional logic for policies.
+type PolicyConditions struct {
+	Labels     map[string]string `json:"labels,omitempty"`     // Resource must have these labels
+	ValidFrom  *time.Time        `json:"validFrom,omitempty"`  // Policy valid from this time
+	ValidUntil *time.Time        `json:"validUntil,omitempty"` // Policy valid until this time
+	SourceIPs  []string          `json:"sourceIps,omitempty"`  // Allowed source IP ranges (CIDR)
+}
+
+// PolicyEffect constants
+const (
+	PolicyEffectAllow = "allow"
+	PolicyEffectDeny  = "deny"
+)
+
+// PolicyScopeType constants
+const (
+	PolicyScopeHub      = "hub"
+	PolicyScopeGrove    = "grove"
+	PolicyScopeResource = "resource"
+)
+
+// PolicyBinding links a principal (user or group) to a policy.
+type PolicyBinding struct {
+	PolicyID      string `json:"policyId"`
+	PrincipalType string `json:"principalType"` // "user" or "group"
+	PrincipalID   string `json:"principalId"`
+}
+
+// PolicyPrincipalType constants
+const (
+	PolicyPrincipalTypeUser  = "user"
+	PolicyPrincipalTypeGroup = "group"
+)
+
+// =============================================================================
 // Conversion Functions: Store -> API
 //
 // These functions convert persistence models to API models for external use.

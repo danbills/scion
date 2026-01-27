@@ -48,6 +48,12 @@ type Store interface {
 
 	// Secret operations
 	SecretStore
+
+	// Group operations (Hub Permissions System)
+	GroupStore
+
+	// Policy operations (Hub Permissions System)
+	PolicyStore
 }
 
 // AgentStore defines agent-related persistence operations.
@@ -338,4 +344,111 @@ type SecretFilter struct {
 	Scope   string // Required: user, grove, runtime_host
 	ScopeID string // Required: ID of the scoped entity
 	Key     string // Optional: filter by specific key
+}
+
+// =============================================================================
+// Groups and Policies (Hub Permissions System)
+// =============================================================================
+
+// GroupStore defines group-related persistence operations.
+type GroupStore interface {
+	// CreateGroup creates a new group record.
+	// Returns ErrAlreadyExists if a group with the same slug exists.
+	CreateGroup(ctx context.Context, group *Group) error
+
+	// GetGroup retrieves a group by ID.
+	// Returns ErrNotFound if the group doesn't exist.
+	GetGroup(ctx context.Context, id string) (*Group, error)
+
+	// GetGroupBySlug retrieves a group by its slug.
+	// Returns ErrNotFound if the group doesn't exist.
+	GetGroupBySlug(ctx context.Context, slug string) (*Group, error)
+
+	// UpdateGroup updates an existing group.
+	// Returns ErrNotFound if the group doesn't exist.
+	UpdateGroup(ctx context.Context, group *Group) error
+
+	// DeleteGroup removes a group by ID.
+	// Also removes all group memberships (both as parent and as member).
+	// Returns ErrNotFound if the group doesn't exist.
+	DeleteGroup(ctx context.Context, id string) error
+
+	// ListGroups returns groups matching the filter criteria.
+	ListGroups(ctx context.Context, filter GroupFilter, opts ListOptions) (*ListResult[Group], error)
+
+	// AddGroupMember adds a user or group as a member of a group.
+	// Returns ErrAlreadyExists if the membership already exists.
+	AddGroupMember(ctx context.Context, member *GroupMember) error
+
+	// RemoveGroupMember removes a member from a group.
+	// Returns ErrNotFound if the membership doesn't exist.
+	RemoveGroupMember(ctx context.Context, groupID, memberType, memberID string) error
+
+	// GetGroupMembers returns all members of a group.
+	GetGroupMembers(ctx context.Context, groupID string) ([]GroupMember, error)
+
+	// GetUserGroups returns all groups a user is a direct member of.
+	GetUserGroups(ctx context.Context, userID string) ([]GroupMember, error)
+
+	// GetGroupMembership returns a specific membership record.
+	// Returns ErrNotFound if the membership doesn't exist.
+	GetGroupMembership(ctx context.Context, groupID, memberType, memberID string) (*GroupMember, error)
+
+	// WouldCreateCycle checks if adding memberGroupID to groupID would create a cycle.
+	// Returns true if a cycle would be created.
+	WouldCreateCycle(ctx context.Context, groupID, memberGroupID string) (bool, error)
+
+	// GetEffectiveGroups returns all groups a user belongs to, including
+	// transitive memberships through nested groups.
+	GetEffectiveGroups(ctx context.Context, userID string) ([]string, error)
+}
+
+// GroupFilter defines criteria for filtering groups.
+type GroupFilter struct {
+	OwnerID  string // Filter by owner
+	ParentID string // Filter by parent group
+}
+
+// PolicyStore defines policy-related persistence operations.
+type PolicyStore interface {
+	// CreatePolicy creates a new policy record.
+	CreatePolicy(ctx context.Context, policy *Policy) error
+
+	// GetPolicy retrieves a policy by ID.
+	// Returns ErrNotFound if the policy doesn't exist.
+	GetPolicy(ctx context.Context, id string) (*Policy, error)
+
+	// UpdatePolicy updates an existing policy.
+	// Returns ErrNotFound if the policy doesn't exist.
+	UpdatePolicy(ctx context.Context, policy *Policy) error
+
+	// DeletePolicy removes a policy by ID.
+	// Also removes all policy bindings.
+	// Returns ErrNotFound if the policy doesn't exist.
+	DeletePolicy(ctx context.Context, id string) error
+
+	// ListPolicies returns policies matching the filter criteria.
+	ListPolicies(ctx context.Context, filter PolicyFilter, opts ListOptions) (*ListResult[Policy], error)
+
+	// AddPolicyBinding binds a principal (user or group) to a policy.
+	// Returns ErrAlreadyExists if the binding already exists.
+	AddPolicyBinding(ctx context.Context, binding *PolicyBinding) error
+
+	// RemovePolicyBinding removes a binding from a policy.
+	// Returns ErrNotFound if the binding doesn't exist.
+	RemovePolicyBinding(ctx context.Context, policyID, principalType, principalID string) error
+
+	// GetPolicyBindings returns all bindings for a policy.
+	GetPolicyBindings(ctx context.Context, policyID string) ([]PolicyBinding, error)
+
+	// GetPoliciesForPrincipal returns all policies bound to a specific principal.
+	GetPoliciesForPrincipal(ctx context.Context, principalType, principalID string) ([]Policy, error)
+}
+
+// PolicyFilter defines criteria for filtering policies.
+type PolicyFilter struct {
+	ScopeType    string // Filter by scope type (hub, grove, resource)
+	ScopeID      string // Filter by scope ID
+	ResourceType string // Filter by resource type
+	Effect       string // Filter by effect (allow, deny)
 }

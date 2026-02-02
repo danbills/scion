@@ -1,7 +1,7 @@
 # Runtime Host Authentication Design
 
 ## Status
-**Phase 2 Implemented** (Runtime Host Integration)
+**Phase 4 Implemented** (Production Hardening)
 
 ## 1. Overview
 
@@ -115,7 +115,7 @@ Before HMAC authentication can work, both parties need a shared secret. This is 
 2. **Host Join (Host-Initiated)**
    - The Runtime Host sends its `joinToken` to the Hub's bootstrap endpoint
    - This must occur over HTTPS
-   - Host includes public metadata (hostname, capabilities, version)
+   - Host includes public metadata (hostname, profiles, version)
 
 3. **Secret Exchange**
    - Hub generates a high-entropy secret key ($K_s$) using `crypto/rand`
@@ -129,8 +129,10 @@ In the common case where a user is logged into the Runtime Host machine and alre
 
 ```bash
 # User runs this on the Runtime Host machine
-scion hub hosts join --name "production-host-1" --capabilities docker,kubernetes
+scion hub hosts join --name "production-host-1" --profiles local,shared-k8s
 ```
+
+For defaults it should use the host info in `~/.scion/`
 
 This command orchestrates the full registration flow:
 
@@ -704,17 +706,39 @@ Rationale:
 - `HostAuthMiddleware` verifies incoming Hub requests using shared secret
 - Server integration loads credentials on startup and configures HMAC auth automatically
 
-### Phase 3: Bidirectional Communication
-- [ ] Add Hub→Host HTTP client with HMAC signing
-- [ ] Implement host callback endpoints
-- [ ] Add agent provisioning flow
+### Phase 3: Bidirectional Communication ✓
+- [x] Add Hub→Host HTTP client with HMAC signing (`pkg/hub/hostclient.go`)
+- [x] Update RuntimeHostClient interface to include hostID (`pkg/hub/server.go`)
+- [x] Update HTTPAgentDispatcher to pass hostID for auth (`pkg/hub/httpdispatcher.go`)
+- [x] Add strict mode config for Runtime Host (`pkg/runtimehost/server.go`)
 
-### Phase 4: Production Hardening
-- [ ] Add nonce cache for replay prevention
-- [ ] Implement secret rotation flow
-- [ ] Add Google Secret Manager integration
-- [ ] Add comprehensive audit logging
-- [ ] Add metrics (auth successes/failures, latency)
+**Implementation Notes (Phase 3):**
+- `AuthenticatedHostClient` wraps HTTP client with HMAC signing using `apiclient.HMACAuth`
+- `RuntimeHostClient` interface methods now take `hostID` as first parameter after `ctx`
+- `HTTPRuntimeHostClient` ignores hostID (for backward compatibility), `AuthenticatedHostClient` uses it for secret lookup
+- `CreateAuthenticatedDispatcher()` helper on Hub Server creates dispatcher with authenticated client
+- `HostAuthStrictMode` config on Runtime Host: when true, requires all requests to be authenticated; when false (default), allows unauthenticated requests during transition
+- Graceful degradation: if secret lookup fails, request proceeds without signature (logged as warning)
+
+### Phase 4: Production Hardening ✓
+- [x] Enable nonce cache by default (`pkg/hub/hostauth.go` - `EnableNonceCache: true`)
+- [x] Implement secret rotation flow (`POST /api/v1/hosts/{id}/rotate-secret`)
+- [x] Add dual-secret validation support (`GetActiveSecrets`, `ValidateHostSignatureWithRotation`)
+- [ ] Add Google Secret Manager integration (deferred - local file storage sufficient for now)
+- [x] Add comprehensive audit logging (`pkg/hub/audit.go`)
+- [x] Add metrics (`pkg/hub/metrics.go`, `/metrics` endpoint)
+
+**Implementation Notes (Phase 4):**
+- Nonce cache now enabled by default in `DefaultHostAuthConfig()` for replay attack prevention
+- `RotateHostSecret()` generates new secret and updates existing record; full dual-secret with schema migration deferred
+- `GetActiveSecrets()` returns both active and deprecated secrets for grace period validation
+- Rotation endpoint at `POST /api/v1/hosts/{id}/rotate-secret` allows admin or host self-rotation
+- `LogAuditLogger` logs to standard logger; implements `AuditLogger` interface for custom backends
+- `AuditableHostAuthMiddleware` wraps auth with audit logging for success/failure events
+- Helper functions: `LogRegistrationEvent`, `LogJoinEvent`, `LogRotateEvent` for handler integration
+- `HostAuthMetrics` tracks counters (auth attempts, registrations, joins, rotations, dispatches) and latency percentiles
+- `/metrics` endpoint returns JSON snapshot of all metrics
+- Note: Current schema uses `host_id` as primary key (one secret per host); true dual-secret rotation requires schema migration to support multiple secrets per host
 
 ---
 
@@ -724,3 +748,4 @@ Rationale:
 - [Auth Overview](auth-overview.md) - Identity model and token types
 - [Agent Authentication](sciontool-auth.md) - Agent-to-Hub JWT
 - [Hosted Architecture](../hosted-architecture.md) - System context
+- [RuntimeHost Websockets](../runtimehost-websocket.md) - Runtimehost websocket architecture details

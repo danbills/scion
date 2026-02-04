@@ -3138,8 +3138,12 @@ func (s *Server) getHarnessFromTemplate(template *store.Template, fallback strin
 }
 
 // resolveRuntimeHost determines which runtime host should run the agent.
-// It checks the explicitly specified host, the grove's default, or returns an error
-// with available alternatives if none is available.
+// Priority order:
+//  1. Explicitly specified host (requestedHostID) - verified to be available
+//  2. Grove's default runtime host - verified to be available
+//  3. Single available contributor - used automatically
+//  4. Multiple available contributors - returns error requiring explicit selection
+//  5. No available hosts - returns error
 // Returns the runtime host ID or an error (after writing the HTTP error response).
 func (s *Server) resolveRuntimeHost(ctx context.Context, w http.ResponseWriter, requestedHostID string, grove *store.Grove) (string, error) {
 	// Get available hosts for this grove (online hosts that are contributors)
@@ -3189,15 +3193,19 @@ func (s *Server) resolveRuntimeHost(ctx context.Context, w http.ResponseWriter, 
 		return "", store.ErrNotFound
 	}
 
-	// Case 3: No default and no explicit host
-	if len(availableHosts) == 0 {
+	// Case 3: No default and no explicit host - use single contributor or require explicit selection
+	switch len(availableHosts) {
+	case 0:
 		NoRuntimeHost(w, "No runtime hosts available for this grove; register a runtime host first", hostSummaries)
 		return "", store.ErrNotFound
+	case 1:
+		// Single available host - use it by default
+		return availableHosts[0].ID, nil
+	default:
+		// Multiple hosts available - require explicit selection
+		NoRuntimeHost(w, "Multiple runtime hosts available for this grove; specify runtimeHostId to select one", hostSummaries)
+		return "", store.ErrNotFound
 	}
-
-	// No explicit host and no default - this shouldn't happen if registration sets defaults properly
-	NoRuntimeHost(w, "No runtime host specified and grove has no default; specify runtimeHostId or set a default", hostSummaries)
-	return "", store.ErrNotFound
 }
 
 // getAvailableHostsForGrove returns online runtime hosts that are contributors to the grove.

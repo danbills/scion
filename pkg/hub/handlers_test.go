@@ -262,6 +262,171 @@ func TestAgentCreate(t *testing.T) {
 	}
 }
 
+// TestAgentCreate_SingleContributor tests that when a grove has no default runtime host
+// but has exactly one online contributor, that contributor is used automatically.
+func TestAgentCreate_SingleContributor(t *testing.T) {
+	srv, s := testServer(t)
+	ctx := context.Background()
+
+	// Create a runtime host
+	host := &store.RuntimeHost{
+		ID:     "host_single",
+		Slug:   "single-host",
+		Name:   "Single Host",
+		Mode:   store.HostModeConnected,
+		Status: store.HostStatusOnline,
+	}
+	if err := s.CreateRuntimeHost(ctx, host); err != nil {
+		t.Fatalf("failed to create runtime host: %v", err)
+	}
+
+	// Create a grove WITHOUT a default runtime host
+	grove := &store.Grove{
+		ID:        "grove_single",
+		Slug:      "single-grove",
+		Name:      "Single Grove",
+		GitRemote: "github.com/test/single",
+		// Note: DefaultRuntimeHostID is NOT set
+		Created: time.Now(),
+		Updated: time.Now(),
+	}
+	if err := s.CreateGrove(ctx, grove); err != nil {
+		t.Fatalf("failed to create grove: %v", err)
+	}
+
+	// Register the host as the only contributor to the grove
+	contrib := &store.GroveContributor{
+		GroveID:  grove.ID,
+		HostID:   host.ID,
+		HostName: host.Name,
+		Mode:     host.Mode,
+		Status:   store.HostStatusOnline,
+	}
+	if err := s.AddGroveContributor(ctx, contrib); err != nil {
+		t.Fatalf("failed to add grove contributor: %v", err)
+	}
+
+	// Create agent without specifying runtimeHostId
+	body := map[string]interface{}{
+		"name":    "Auto Resolved Agent",
+		"groveId": grove.ID,
+	}
+
+	rec := doRequest(t, srv, http.MethodPost, "/api/v1/agents", body)
+
+	if rec.Code != http.StatusCreated {
+		t.Errorf("expected status 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp CreateAgentResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	// Should automatically use the single contributor
+	if resp.Agent.RuntimeHostID != host.ID {
+		t.Errorf("expected runtimeHostId %q (single contributor), got %q", host.ID, resp.Agent.RuntimeHostID)
+	}
+}
+
+// TestAgentCreate_MultipleContributors tests that when a grove has multiple online contributors
+// but no default runtime host, an error is returned requiring explicit selection.
+func TestAgentCreate_MultipleContributors(t *testing.T) {
+	srv, s := testServer(t)
+	ctx := context.Background()
+
+	// Create two runtime hosts
+	host1 := &store.RuntimeHost{
+		ID:     "host_multi1",
+		Slug:   "multi-host-1",
+		Name:   "Multi Host 1",
+		Mode:   store.HostModeConnected,
+		Status: store.HostStatusOnline,
+	}
+	if err := s.CreateRuntimeHost(ctx, host1); err != nil {
+		t.Fatalf("failed to create runtime host 1: %v", err)
+	}
+
+	host2 := &store.RuntimeHost{
+		ID:     "host_multi2",
+		Slug:   "multi-host-2",
+		Name:   "Multi Host 2",
+		Mode:   store.HostModeConnected,
+		Status: store.HostStatusOnline,
+	}
+	if err := s.CreateRuntimeHost(ctx, host2); err != nil {
+		t.Fatalf("failed to create runtime host 2: %v", err)
+	}
+
+	// Create a grove WITHOUT a default runtime host
+	grove := &store.Grove{
+		ID:        "grove_multi",
+		Slug:      "multi-grove",
+		Name:      "Multi Grove",
+		GitRemote: "github.com/test/multi",
+		// Note: DefaultRuntimeHostID is NOT set
+		Created: time.Now(),
+		Updated: time.Now(),
+	}
+	if err := s.CreateGrove(ctx, grove); err != nil {
+		t.Fatalf("failed to create grove: %v", err)
+	}
+
+	// Register both hosts as contributors to the grove
+	contrib1 := &store.GroveContributor{
+		GroveID:  grove.ID,
+		HostID:   host1.ID,
+		HostName: host1.Name,
+		Mode:     host1.Mode,
+		Status:   store.HostStatusOnline,
+	}
+	if err := s.AddGroveContributor(ctx, contrib1); err != nil {
+		t.Fatalf("failed to add grove contributor 1: %v", err)
+	}
+
+	contrib2 := &store.GroveContributor{
+		GroveID:  grove.ID,
+		HostID:   host2.ID,
+		HostName: host2.Name,
+		Mode:     host2.Mode,
+		Status:   store.HostStatusOnline,
+	}
+	if err := s.AddGroveContributor(ctx, contrib2); err != nil {
+		t.Fatalf("failed to add grove contributor 2: %v", err)
+	}
+
+	// Attempt to create agent without specifying runtimeHostId
+	body := map[string]interface{}{
+		"name":    "Ambiguous Agent",
+		"groveId": grove.ID,
+	}
+
+	rec := doRequest(t, srv, http.MethodPost, "/api/v1/agents", body)
+
+	// Should fail with 422 because multiple hosts are available and explicit selection is required
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("expected status 422, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var errResp ErrorResponse
+	if err := json.NewDecoder(rec.Body).Decode(&errResp); err != nil {
+		t.Fatalf("failed to decode error response: %v", err)
+	}
+
+	if errResp.Error.Code != ErrCodeNoRuntimeHost {
+		t.Errorf("expected error code %q, got %q", ErrCodeNoRuntimeHost, errResp.Error.Code)
+	}
+
+	// Should include available hosts in the response details
+	availableHosts, ok := errResp.Error.Details["availableHosts"].([]interface{})
+	if !ok {
+		t.Fatalf("expected availableHosts in error details, got %v", errResp.Error.Details)
+	}
+	if len(availableHosts) != 2 {
+		t.Errorf("expected 2 available hosts in error, got %d", len(availableHosts))
+	}
+}
+
 func TestAgentGetByID(t *testing.T) {
 	srv, s := testServer(t)
 	ctx := context.Background()

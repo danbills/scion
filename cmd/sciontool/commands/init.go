@@ -20,6 +20,7 @@ import (
 	"github.com/ptone/scion-agent/pkg/sciontool/hub"
 	"github.com/ptone/scion-agent/pkg/sciontool/log"
 	"github.com/ptone/scion-agent/pkg/sciontool/supervisor"
+	"github.com/ptone/scion-agent/pkg/sciontool/telemetry"
 )
 
 var (
@@ -86,6 +87,30 @@ func runInit(args []string) int {
 
 	// Set up scion user UID/GID to match host user
 	targetUID, targetGID := setupHostUser()
+
+	// Start telemetry pipeline if configured
+	var telemetryPipeline *telemetry.Pipeline
+	if pipeline := telemetry.New(); pipeline != nil {
+		telemetryCtx, telemetryCancel := context.WithCancel(context.Background())
+		if err := pipeline.Start(telemetryCtx); err != nil {
+			log.Error("Failed to start telemetry: %v", err)
+			telemetryCancel()
+			// Continue anyway - telemetry failure shouldn't block agent
+		} else {
+			telemetryPipeline = pipeline
+			log.Info("Telemetry pipeline started")
+		}
+		defer func() {
+			if telemetryPipeline != nil {
+				shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				if err := telemetryPipeline.Stop(shutdownCtx); err != nil {
+					log.Error("Failed to stop telemetry: %v", err)
+				}
+				shutdownCancel()
+			}
+			telemetryCancel()
+		}()
+	}
 
 	// Initialize lifecycle hooks manager
 	lifecycleManager := hooks.NewLifecycleManager()

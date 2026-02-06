@@ -1,7 +1,7 @@
 # Hosted Scion Metrics System Design
 
 ## Status
-**In Progress** - Milestones 1-2 complete. Milestones 3-4 pending.
+**In Progress** - Milestones 1-2.5 complete. Milestones 3-4 pending.
 
 ## 1. Overview
 
@@ -854,9 +854,10 @@ telemetry:
 |------|-------------|
 | `config.go` | Configuration loading from env vars (SCION_TELEMETRY_*, SCION_OTEL_*) |
 | `filter.go` | Include/exclude filtering with privacy default (agent.user.prompt excluded) |
-| `exporter.go` | OTLP gRPC/HTTP exporter with raw proto forwarding |
-| `receiver.go` | Embedded OTLP gRPC (4317) and HTTP (4318) receivers |
-| `pipeline.go` | Main orchestration: Start/Stop lifecycle, span handler |
+| `exporter.go` | OTLP gRPC/HTTP exporter with raw proto forwarding (traces + metrics) |
+| `receiver.go` | Embedded OTLP gRPC (4317) and HTTP (4318) receivers (TraceService + MetricsService) |
+| `pipeline.go` | Main orchestration: Start/Stop lifecycle, span + metric handlers |
+| `providers.go` | SDK TracerProvider, LoggerProvider, and MeterProvider initialization |
 | `*_test.go` | Unit tests for config, filter, and pipeline |
 
 **Key Design Decisions:**
@@ -944,6 +945,89 @@ Enabled via `SCION_OTEL_LOG_ENABLED=true` with endpoint in `SCION_OTEL_ENDPOINT`
 - `go.opentelemetry.io/contrib/bridges/otelslog`
 - `go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc`
 - `go.opentelemetry.io/otel/sdk/log`
+
+### Milestone 2.5: OTel Metrics Pipeline & Correlated Logs ✅ COMPLETE
+
+**Goal:** Extend the trace-only telemetry pipeline to support native OTel metrics (counters, histograms) and emit correlated log records alongside spans for hook events. Addresses the improvements outlined in `.design/hosted/metrics-improvements.md` (sections "Add logs with event data associated with spans" and "Include a proper metrics pipeline").
+
+**Status:** Completed 2026-02-06
+
+**Deliverables:**
+- [x] **MeterProvider**: SDK `metric.MeterProvider` created alongside `TracerProvider` and `LoggerProvider` in `Providers` struct, using `otlpmetricgrpc` exporter with periodic reader.
+- [x] **Metric Receiver**: `MetricsServiceServer` (gRPC) and `/v1/metrics` (HTTP) endpoints added to the embedded OTLP receiver for agents that natively emit OTel metrics.
+- [x] **Metric Exporter**: `ExportProtoMetrics()` method on `CloudExporter` for raw proto metric forwarding to cloud endpoint, reusing the existing gRPC connection.
+- [x] **Pipeline Wiring**: `handleMetrics()` method on `Pipeline`, forwarding received metrics to the cloud exporter (parallel to `handleSpans`).
+- [x] **TelemetryHandler Instruments**: Eight OTel metric instruments recording counters and histograms on hook events.
+- [x] **Correlated OTel Logs**: `otelslog`-bridged logger on `TelemetryHandler` emitting log records with trace/span correlation on every hook event.
+
+**Test Criteria:**
+- `go build` succeeds with all new metric types.
+- Unit tests verify MeterProvider creation, metric instrument initialization, and metric recording on tool-end, model-end, and session-end events.
+- Pipeline tests verify metric handler registration and forwarding path.
+
+#### Implementation Notes
+
+**Metric Instruments (TelemetryHandler):**
+
+| Instrument | Type | Unit | Recorded On | Labels |
+|---|---|---|---|---|
+| `gen_ai.tokens.input` | Counter (Int64) | `{token}` | `session-end` | model, harness, agent_id |
+| `gen_ai.tokens.output` | Counter (Int64) | `{token}` | `session-end` | model, harness, agent_id |
+| `gen_ai.tokens.cached` | Counter (Int64) | `{token}` | `session-end` | model, harness, agent_id |
+| `agent.tool.calls` | Counter (Int64) | `{call}` | `tool-end` | tool_name, status, harness |
+| `agent.tool.duration` | Histogram (Float64) | `ms` | `tool-end` | tool_name, harness |
+| `agent.session.count` | Counter (Int64) | `{session}` | `session-end` | harness, status |
+| `gen_ai.api.calls` | Counter (Int64) | `{call}` | `model-end` | model, status |
+| `gen_ai.api.duration` | Histogram (Float64) | `ms` | `model-end` | model |
+
+Token counters (`gen_ai.tokens.*`) are populated from session file parsing on `session-end`, reusing the existing `session.ParseLatestSession()` logic.
+
+**Label Sources:**
+
+Labels are derived from environment variables injected into the agent container:
+- `agent_id` from `SCION_AGENT_ID`
+- `harness` from `SCION_HARNESS`
+- `model` from `SCION_MODEL`
+- `tool_name` and `status` from the hook event data
+
+**Architecture:**
+
+The metrics pipeline mirrors the existing trace pipeline:
+```
+Hook Events → TelemetryHandler → MeterProvider → OTLP Metric Exporter → Cloud
+                                                                          ↑
+Agent (native OTLP) → Receiver (MetricsService) → Pipeline → Exporter ───┘
+```
+
+**Correlated Log Records:**
+
+Each hook event emits a log record via `otelslog` with the span name as the log body and all event attributes as log attributes. The `otelslog` bridge automatically extracts `trace_id` and `span_id` from the span context, enabling click-through from trace waterfall to associated logs in GCP Console.
+
+**Key Design Decisions:**
+
+1. **Metric instruments on TelemetryHandler**: Instruments are defined on the handler rather than a separate metrics package, since the handler is the natural emission point (same pattern as spans).
+2. **Variadic MeterProvider parameter**: `NewTelemetryHandler` accepts `mp ...metric.MeterProvider` to maintain backward compatibility with existing callers.
+3. **No metric filtering**: All metrics are forwarded without filtering. Metric volume is inherently lower than trace volume, so filtering is unnecessary at this stage.
+4. **Receiver options pattern**: `WithMetricHandler()` functional option on `NewReceiver` to avoid breaking the existing span-only constructor signature.
+5. **Shared gRPC connection**: The metric client reuses the same `grpc.ClientConn` as the trace client in `CloudExporter`.
+
+**Files Modified:**
+
+| File | Changes |
+|------|---------|
+| `pkg/sciontool/telemetry/providers.go` | Added `MeterProvider` field, `otlpmetricgrpc` exporter, periodic reader, shutdown |
+| `pkg/sciontool/telemetry/receiver.go` | Added `MetricHandler`, `MetricsServiceServer`, `/v1/metrics` HTTP handler, `ReceiverOption` |
+| `pkg/sciontool/telemetry/exporter.go` | Added `MetricsServiceClient`, `ExportProtoMetrics()` method |
+| `pkg/sciontool/telemetry/pipeline.go` | Added `handleMetrics()`, wired metric handler to receiver |
+| `pkg/sciontool/hooks/handlers/telemetry.go` | Added 8 metric instruments, `initMetrics()`, `recordEndMetrics()`, `recordSessionMetrics()`, correlated log emission |
+| `cmd/sciontool/commands/hook.go` | Pass `MeterProvider` to `NewTelemetryHandler` |
+| `cmd/sciontool/commands/init.go` | Pass `MeterProvider` to `NewTelemetryHandler` |
+
+**Dependencies Added:**
+- `go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc`
+- `go.opentelemetry.io/otel/sdk/metric` (already indirect, now direct)
+- `go.opentelemetry.io/otel/metric` (already indirect, now direct)
+- `go.opentelemetry.io/proto/otlp/collector/metrics/v1` (from existing `proto/otlp` module)
 
 ### Milestone 3: Hub Reporting & Storage
 

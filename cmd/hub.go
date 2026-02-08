@@ -67,20 +67,25 @@ Examples:
 
 // hubGrovesInfoCmd shows detailed information about a grove
 var hubGrovesInfoCmd = &cobra.Command{
-	Use:   "info <grove-name>",
+	Use:   "info [grove-name]",
 	Short: "Show detailed information about a grove",
 	Long: `Show detailed information about a grove on the Hub.
 
 Displays grove metadata including creation date, broker providers,
 and agent count.
 
+If no grove name is provided, the current grove is used.
+
 Examples:
+  # Show info for the current grove
+  scion hub groves info
+
   # Show info for a grove by name
   scion hub groves info my-project
 
   # Output as JSON
   scion hub groves info my-project --json`,
-	Args: cobra.ExactArgs(1),
+	Args: cobra.MaximumNArgs(1),
 	RunE: runHubGrovesInfo,
 }
 
@@ -752,10 +757,13 @@ func runHubGroves(cmd *cobra.Command, args []string) error {
 }
 
 func runHubGrovesInfo(cmd *cobra.Command, args []string) error {
-	groveName := args[0]
-
 	// Resolve grove path to find project settings
-	resolvedPath, _, err := config.ResolveGrovePath(grovePath)
+	gp := grovePath
+	if gp == "" && globalMode {
+		gp = "global"
+	}
+
+	resolvedPath, isGlobal, err := config.ResolveGrovePath(gp)
 	if err != nil {
 		return fmt.Errorf("failed to resolve grove path: %w", err)
 	}
@@ -763,6 +771,24 @@ func runHubGrovesInfo(cmd *cobra.Command, args []string) error {
 	settings, err := config.LoadSettings(resolvedPath)
 	if err != nil {
 		return fmt.Errorf("failed to load settings: %w", err)
+	}
+
+	// Determine grove name from args or current grove
+	var groveName string
+	if len(args) > 0 {
+		groveName = args[0]
+	} else {
+		// Use current grove name
+		if isGlobal {
+			groveName = "global"
+		} else {
+			gitRemote := util.GetGitRemote()
+			if gitRemote != "" {
+				groveName = util.ExtractRepoName(gitRemote)
+			} else {
+				groveName = filepath.Base(filepath.Dir(resolvedPath))
+			}
+		}
 	}
 
 	client, err := getHubClient(settings)
@@ -850,9 +876,6 @@ func runHubGrovesInfo(cmd *cobra.Command, args []string) error {
 				defaultIndicator = " (default)"
 			}
 			fmt.Printf("  - %s %s%s\n", p.BrokerName, statusIndicator, defaultIndicator)
-			if !p.LinkedAt.IsZero() {
-				fmt.Printf("    Linked: %s\n", p.LinkedAt.Format(time.RFC3339))
-			}
 		}
 	} else {
 		fmt.Println()

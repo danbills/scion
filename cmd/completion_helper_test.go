@@ -102,4 +102,28 @@ func TestGetAgentNames(t *testing.T) {
 		names, _ := getAgentNames(cmd, []string{"already-have-arg"}, "")
 		assert.Nil(t, names)
 	})
+
+	t.Run("Multi complete excludes already provided", func(t *testing.T) {
+		names, dir := getMultiAgentNames(cmd, []string{"agent1"}, "")
+		assert.Contains(t, names, "agent2")
+		assert.Contains(t, names, "foobar")
+		assert.NotContains(t, names, "agent1")
+		assert.Len(t, names, 2)
+		assert.Equal(t, cobra.ShellCompDirectiveNoFileComp, dir)
+	})
+
+	t.Run("Multi complete with prefix and exclusion", func(t *testing.T) {
+		names, _ := getMultiAgentNames(cmd, []string{"agent1"}, "agent")
+		assert.Contains(t, names, "agent2")
+		assert.NotContains(t, names, "agent1")
+		assert.Len(t, names, 1)
+	})
+
+	t.Run("Multi complete no args same as single", func(t *testing.T) {
+		names, _ := getMultiAgentNames(cmd, []string{}, "")
+		assert.Contains(t, names, "agent1")
+		assert.Contains(t, names, "agent2")
+		assert.Contains(t, names, "foobar")
+		assert.Len(t, names, 3)
+	})
 }

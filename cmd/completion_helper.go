@@ -34,13 +34,27 @@ const (
 	completionTimeout = 500 * time.Millisecond
 )
 
+// getMultiAgentNames provides completion for commands that accept multiple agent names.
+// It excludes already-provided args from the suggestions.
+func getMultiAgentNames(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	return completeAgentNames(cmd, args, toComplete)
+}
+
 func getAgentNames(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 	if len(args) > 0 {
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
+	return completeAgentNames(cmd, args, toComplete)
+}
 
+func completeAgentNames(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 	var names []string
 	seen := make(map[string]bool)
+
+	// Exclude already-provided arguments from suggestions
+	for _, arg := range args {
+		seen[arg] = true
+	}
 
 	// Helper to add names with deduplication and prefix matching
 	addNames := func(agentNames []string) {

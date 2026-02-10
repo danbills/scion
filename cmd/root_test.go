@@ -127,7 +127,7 @@ hub:
 			expectWarning: false,
 		},
 		{
-			name:          "Hub endpoint via flag with dev token env",
+			name:          "Local hub endpoint with dev token env var",
 			noHubFlag:     false,
 			hubEndpoint:   "http://localhost:9810",
 			devTokenEnv:   "scion_dev_testtoken123",
@@ -139,6 +139,27 @@ hub:
 			hubEndpoint:   "http://localhost:9810",
 			devTokenEnv:   "",
 			expectWarning: false,
+		},
+		{
+			name:          "Remote hub with dev token env var warns",
+			noHubFlag:     false,
+			hubEndpoint:   "https://hub.demo.scion-ai.dev/",
+			devTokenEnv:   "scion_dev_testtoken123",
+			expectWarning: true,
+		},
+		{
+			name:          "Remote hub with dev token file does not warn",
+			noHubFlag:     false,
+			hubEndpoint:   "https://hub.demo.scion-ai.dev/",
+			devTokenFile:  "scion_dev_testtoken123",
+			expectWarning: false,
+		},
+		{
+			name:          "Local hub with dev token file warns",
+			noHubFlag:     false,
+			hubEndpoint:   "http://localhost:9810",
+			devTokenFile:  "scion_dev_testtoken123",
+			expectWarning: true,
 		},
 	}
 
@@ -156,6 +177,15 @@ hub:
 				os.Unsetenv("SCION_DEV_TOKEN")
 			}
 			os.Unsetenv("SCION_DEV_TOKEN_FILE")
+
+			// Write dev token file if specified
+			devTokenPath := filepath.Join(scionDir, "dev-token")
+			if tt.devTokenFile != "" {
+				os.WriteFile(devTokenPath, []byte(tt.devTokenFile+"\n"), 0600)
+				defer os.Remove(devTokenPath)
+			} else {
+				os.Remove(devTokenPath)
+			}
 
 			// Capture stderr
 			oldStderr := os.Stderr
@@ -179,6 +209,28 @@ hub:
 			} else {
 				assert.NotContains(t, output, "WARNING")
 			}
+		})
+	}
+}
+
+func TestIsLocalEndpoint(t *testing.T) {
+	tests := []struct {
+		endpoint string
+		expected bool
+	}{
+		{"http://localhost:9810", true},
+		{"http://127.0.0.1:9810", true},
+		{"http://[::1]:9810", true},
+		{"http://0.0.0.0:9810", true},
+		{"https://hub.demo.scion-ai.dev/", false},
+		{"https://example.com", false},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.endpoint, func(t *testing.T) {
+			result := isLocalEndpoint(tt.endpoint)
+			assert.Equal(t, tt.expected, result)
 		})
 	}
 }

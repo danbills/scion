@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 
@@ -229,13 +230,37 @@ func printDevAuthWarningIfNeeded(grovePath string) {
 	}
 
 	// Check if a dev token would be used
-	devToken := apiclient.ResolveDevToken()
+	devToken, devTokenSource := apiclient.ResolveDevTokenWithSource()
 	if devToken == "" {
 		// No dev token available
 		return
 	}
 
+	// Only warn if the dev token is explicitly set via environment variable,
+	// or if the hub endpoint is a local address. A stale ~/.scion/dev-token file
+	// should not trigger a warning when connecting to a remote hub, since
+	// the remote hub likely doesn't use dev-auth.
+	if devTokenSource != "SCION_DEV_TOKEN env var" {
+		if !isLocalEndpoint(endpoint) {
+			return
+		}
+	}
+
 	// Dev auth is being used with Hub enabled - print warning to stderr
 	fmt.Fprintf(os.Stderr, "\n%s%s WARNING: Development authentication enabled - not for production use %s\n\n",
 		util.Bold, util.Yellow, util.Reset)
+}
+
+// isLocalEndpoint returns true if the given endpoint URL points to a local address
+// (localhost, 127.0.0.1, ::1, or 0.0.0.0).
+func isLocalEndpoint(endpoint string) bool {
+	if endpoint == "" {
+		return false
+	}
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	return host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "0.0.0.0"
 }

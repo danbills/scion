@@ -25,7 +25,6 @@ ENV PATH="/usr/local/go/bin:${PATH}"
 ENV CGO_ENABLED=1
 
 # Build arguments for version info
-# GIT_COMMIT: If provided, overrides Go's VCS stamping. If empty, falls back to vcs.revision from .git
 ARG GIT_COMMIT
 ARG BUILD_TIME
 
@@ -33,17 +32,13 @@ ARG BUILD_TIME
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Copy .git for Go's VCS stamping (enables debug.ReadBuildInfo fallback)
-# This allows vcs.revision to be embedded when GIT_COMMIT isn't passed
-COPY .git/ ./.git/
-
 # Copy source and build scion and sciontool
 COPY cmd/ ./cmd/
 COPY pkg/ ./pkg/
 
 # Build with version info injected via ldflags
-# BUILD_TIME is computed at build time if not provided
-# GIT_COMMIT is only added to ldflags if provided; otherwise Go's VCS stamping handles it via .git
+# VCS stamping is disabled since .git is not in the build context;
+# commit info is passed explicitly via the GIT_COMMIT build arg
 RUN BUILD_TIME="${BUILD_TIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}" && \
     SCION_PKG="github.com/ptone/scion-agent/pkg/version" && \
     SCIONTOOL_PKG="github.com/ptone/scion-agent/cmd/sciontool/commands" && \
@@ -53,8 +48,8 @@ RUN BUILD_TIME="${BUILD_TIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}" && \
         SCION_LDFLAGS="${SCION_LDFLAGS} -X ${SCION_PKG}.Commit=${GIT_COMMIT}"; \
         SCIONTOOL_LDFLAGS="${SCIONTOOL_LDFLAGS} -X ${SCIONTOOL_PKG}.Commit=${GIT_COMMIT}"; \
     fi && \
-    go build -ldflags="${SCION_LDFLAGS}" -o /usr/local/bin/scion ./cmd/scion/ && \
-    go build -ldflags="${SCIONTOOL_LDFLAGS}" -o /usr/local/bin/sciontool ./cmd/sciontool/
+    go build -buildvcs=false -ldflags="${SCION_LDFLAGS}" -o /usr/local/bin/scion ./cmd/scion/ && \
+    go build -buildvcs=false -ldflags="${SCIONTOOL_LDFLAGS}" -o /usr/local/bin/sciontool ./cmd/sciontool/
 
 # Final stage
 FROM base

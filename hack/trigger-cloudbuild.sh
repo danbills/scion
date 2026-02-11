@@ -26,6 +26,7 @@ cd "${REPO_ROOT}"
 TARGET="${1:-all}"
 PROJECT="${PROJECT:-ptone-misc}"
 SHORT_SHA=$(git rev-parse --short HEAD)
+COMMIT_SHA=$(git rev-parse HEAD)
 
 case "${TARGET}" in
   all)
@@ -59,7 +60,7 @@ esac
 
 gcloud builds submit --async \
   --project="${PROJECT}" \
-  --substitutions="SHORT_SHA=${SHORT_SHA}" \
+  --substitutions="SHORT_SHA=${SHORT_SHA},COMMIT_SHA=${COMMIT_SHA}" \
   --config="${CONFIG}" .
 
 echo ""

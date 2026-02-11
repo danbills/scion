@@ -1,7 +1,7 @@
 # Hosted Workspace Sync Design
 
 **Created:** 2026-02-03
-**Updated:** 2026-02-03
+**Updated:** 2026-02-11
 **Status:** Approved - Ready for Implementation
 **Author:** Architecture Team
 
@@ -21,9 +21,10 @@
 10. [Code Reuse and Factoring](#10-code-reuse-and-factoring)
 11. [Incremental Sync](#11-incremental-sync)
 12. [Security Considerations](#12-security-considerations)
-13. [Open Questions](#13-open-questions)
-14. [Implementation Plan](#14-implementation-plan)
-15. [References](#15-references)
+13. [Workspace Bootstrap at Agent Creation](#13-workspace-bootstrap-at-agent-creation)
+14. [Design Decisions](#14-design-decisions)
+15. [Implementation Plan](#15-implementation-plan)
+16. [References](#16-references)
 
 ---
 
@@ -1063,9 +1064,337 @@ Default exclude patterns prevent accidental sync of:
 
 ---
 
-## 13. Design Decisions
+## 13. Workspace Bootstrap at Agent Creation
 
-### 13.1 Resolved Questions
+### 13.1 Problem Statement (The Bootstrap Gap)
+
+Sections 4-9 of this document describe **on-demand** workspace synchronization between a running agent and the CLI. However, there is a critical gap: when a CLI user on Machine A creates an agent that executes on a Runtime Broker on Machine B, there is no mechanism to provision the agent's **initial** workspace with the correct content.
+
+#### 13.1.1 Current Behavior
+
+Today, the agent creation flow through Hub → Broker works as follows:
+
+1. **CLI** sends `CreateAgentRequest` to Hub with `Name`, `GroveID`, `Template`, `Branch`. The `--workspace` flag is parsed but never sent in the Hub path — it is only used in local mode.
+2. **Hub** looks up the `GroveProvider.LocalPath` for the target broker — a filesystem path registered when the broker was linked to the grove. Hub sends this as `GrovePath` in the dispatch to the broker.
+3. **Runtime Broker** receives `GrovePath` and passes it to `manager.Start()`, which calls `ProvisionAgent()`. This function resolves a `projectDir` from `GrovePath`, creates a git worktree from whatever repository exists **on the broker's local filesystem** at that path, and bind-mounts the resulting directory into the container.
+
+#### 13.1.2 Consequences
+
+- The agent's workspace reflects the **broker's local git state** (different commits, different branch, different working tree), not the CLI user's.
+- The `Branch` field from the create request is not propagated through to the broker's provisioning logic.
+- If the broker does not have the repository cloned at the registered `LocalPath`, provisioning fails entirely.
+- There is no path for the CLI user's workspace content to reach the remote agent before it starts.
+
+#### 13.1.3 Relationship to On-Demand Sync
+
+The existing on-demand sync (`scion sync to <agent>`) cannot fill this gap because:
+
+- `handleWorkspaceSyncToFinalize()` requires `agent.Status == "running"` — but the agent needs workspace content to start meaningfully.
+- Even if the status check were relaxed, the broker's provisioning has already created the worktree from its local state before the agent starts, so the sync would be a corrective overwrite rather than a clean bootstrap.
+
+This creates a chicken-and-egg problem: the agent needs workspace content to do useful work, but the sync mechanism requires the agent to already be running.
+
+### 13.2 Design Principle: Git vs Non-Git
+
+Workspace bootstrap strategy depends on whether the grove is backed by a git repository. The two cases have fundamentally different characteristics and should use different transfer mechanisms.
+
+| Scenario | Strategy | Rationale |
+|----------|----------|-----------|
+| **Git-backed grove** | Git clone/fetch on broker from remote | Git is purpose-built for distributing repository state efficiently. Avoids uploading potentially large repos through GCS. The remote is the single source of truth. |
+| **Non-git workspace** | GCS signed URL sync | No git remote to pull from. Reuse the existing transfer infrastructure from on-demand sync (Sections 4-9). |
+
+### 13.3 Git-Backed Workspace Bootstrap
+
+When the grove is a git repository, the broker should obtain workspace content by cloning or fetching from the git remote — not by relying on a pre-existing local checkout.
+
+#### 13.3.1 CLI-Side Validation
+
+Before dispatching agent creation, the CLI must validate that the current workspace state is **reproducible from the git remote**. If it is not, the remote agent cannot be given equivalent content, and creation must fail or warn.
+
+**Check 1: All commits must be pushed.**
+
+The CLI compares the local branch HEAD with the remote tracking branch. If there are unpushed commits, creation fails:
+
+```
+Error: Cannot create remote agent: branch 'feature-xyz' has 3 unpushed
+commits that would not be available to the remote agent.
+
+Push your changes first:
+  git push origin feature-xyz
+```
+
+**Check 2: No uncommitted changes (warning).**
+
+If the working tree has uncommitted modifications, the CLI warns but proceeds. The remote agent will get the last committed state:
+
+```
+Warning: Working tree has uncommitted changes that will not be present
+on the remote agent's workspace. Commit and push, or use
+'scion sync to <agent>' after creation to transfer local state.
+```
+
+**Check 3: Remote URL is resolvable.**
+
+The CLI reads the remote URL from `git remote get-url origin` (or the configured remote) and includes it in the create request. The broker must be able to reach this URL. The CLI does not validate reachability on the broker's behalf — that surfaces as a broker-side error during provisioning.
+
+#### 13.3.2 Data Flow
+
+```
+CLI                          Hub                    Runtime Broker
+ │                            │                           │
+ │ 1. Validate local git:     │                           │
+ │    - HEAD pushed?          │                           │
+ │    - dirty working tree?   │                           │
+ │                            │                           │
+ │ 2. CreateAgentRequest      │                           │
+ │    + gitRemoteURL          │                           │
+ │    + gitRef (branch/SHA)   │                           │
+ ├───────────────────────────>│                           │
+ │                            │                           │
+ │                            │ 3. Dispatch to broker     │
+ │                            │    + gitRemoteURL         │
+ │                            │    + gitRef               │
+ │                            ├──────────────────────────>│
+ │                            │                           │
+ │                            │    4. Clone or fetch repo │
+ │                            │       into managed path   │
+ │                            │       Create worktree at  │
+ │                            │       gitRef              │
+ │                            │                           │
+ │                            │ 5. Container started      │
+ │                            │<──────────────────────────┤
+ │                            │                           │
+ │ 6. Response: created       │                           │
+ │<───────────────────────────│                           │
+```
+
+#### 13.3.3 Request Changes
+
+The `CreateAgentRequest` (CLI → Hub) and `RemoteCreateAgentRequest` (Hub → Broker) gain workspace bootstrap fields:
+
+```go
+// In hubclient (CLI → Hub)
+type CreateAgentRequest struct {
+    // ... existing fields ...
+
+    // Workspace bootstrap (git mode)
+    GitRemoteURL string `json:"gitRemoteUrl,omitempty"` // e.g. "git@github.com:org/repo.git"
+    GitRef       string `json:"gitRef,omitempty"`       // Branch name or commit SHA
+}
+
+// In hub (Hub → Broker dispatch)
+type RemoteCreateAgentRequest struct {
+    // ... existing fields ...
+
+    GitRemoteURL string `json:"gitRemoteUrl,omitempty"`
+    GitRef       string `json:"gitRef,omitempty"`
+}
+```
+
+The Hub passes these fields through from the CLI request to the broker dispatch. It also stores them on the agent record for observability (e.g., `scion status` can show what ref an agent was created from).
+
+#### 13.3.4 Broker Provisioning Changes
+
+When the broker receives a create request with `GitRemoteURL` set, workspace provisioning changes from the current `GrovePath`-based logic to a git-remote-based flow:
+
+1. **Check for existing clone.** The broker maintains a managed directory for repository clones (e.g., `<broker-data>/repos/<grove-id>/`). If a clone of the same remote URL already exists, run `git fetch origin` to update it.
+
+2. **Fresh clone if needed.** If no existing clone, run `git clone --bare <gitRemoteURL>` (or `--mirror`) into the managed directory. A bare clone is sufficient since the broker only needs to create worktrees from it.
+
+3. **Create worktree at ref.** Create a git worktree at the specified `GitRef` under the agent's workspace directory, the same as local provisioning does today but from the managed clone rather than from `GrovePath`.
+
+4. **Fallback.** If `GitRemoteURL` is not set, fall back to current behavior (use `GrovePath` from `GroveProvider.LocalPath`). This preserves backward compatibility for brokers co-located with the repo.
+
+```go
+// Pseudocode for broker workspace resolution
+func resolveWorkspace(req CreateAgentRequest) (string, error) {
+    if req.GitRemoteURL != "" {
+        repoDir := filepath.Join(brokerDataDir, "repos", req.GroveID)
+        if exists(repoDir) {
+            gitFetch(repoDir)
+        } else {
+            gitCloneBare(req.GitRemoteURL, repoDir)
+        }
+        ref := req.GitRef
+        if ref == "" {
+            ref = slugify(req.Name)
+        }
+        worktreePath := filepath.Join(agentsDir, req.Name, "workspace")
+        createWorktree(repoDir, worktreePath, ref)
+        return worktreePath, nil
+    }
+
+    // Fallback: existing GrovePath behavior
+    return provisionFromGrovePath(req.GrovePath, req.Name)
+}
+```
+
+#### 13.3.5 Git Credential Access on Broker
+
+The broker needs git credentials to clone private repositories. This is a broker-level configuration concern, not a per-request concern:
+
+- **SSH:** The broker's service account or user has SSH keys with access to the relevant repositories. Standard `~/.ssh/config` or deploy keys.
+- **HTTPS with credential helper:** The broker is configured with a git credential helper (e.g., `gcloud` credential helper for Cloud Source Repositories, GitHub App token helper).
+- **Shared credentials via Grove registration:** When a broker is registered as a grove provider, the administrator ensures the broker has appropriate access to the grove's repository.
+
+This is explicitly **not** a credential-forwarding mechanism from the CLI. The broker is a trusted compute node that has been granted access to the repositories it serves.
+
+#### 13.3.6 Branch Handling
+
+The `GitRef` field supports multiple forms:
+
+| Value | Behavior |
+|-------|----------|
+| Branch name (e.g., `main`, `feature-xyz`) | Create worktree tracking that branch |
+| Commit SHA | Create worktree in detached HEAD at that commit |
+| Empty / omitted | Create a new branch named after the agent slug (current behavior) |
+
+When the CLI sends a branch name, it should send the same value from `git rev-parse --abbrev-ref HEAD` (the current branch) so the agent works on the same branch the user is on.
+
+### 13.4 Non-Git Workspace Bootstrap
+
+For workspaces that are not backed by a git repository, the existing GCS signed URL mechanism (Sections 4-9) is used, but integrated into the creation flow as a pre-start step rather than a separate post-creation command.
+
+#### 13.4.1 Data Flow
+
+```
+CLI                          Hub                    GCS              Runtime Broker
+ │                            │                      │                     │
+ │ 1. Collect workspace files │                      │                     │
+ │    (transfer.CollectFiles) │                      │                     │
+ │                            │                      │                     │
+ │ 2. CreateAgent request     │                      │                     │
+ │    + file manifest         │                      │                     │
+ ├───────────────────────────>│                      │                     │
+ │                            │                      │                     │
+ │ 3. Hub creates agent       │                      │                     │
+ │    (status: "provisioning")│                      │                     │
+ │    Returns upload URLs     │                      │                     │
+ │<───────────────────────────│                      │                     │
+ │                            │                      │                     │
+ │ 4. Upload files via        │                      │                     │
+ │    signed URLs             │                      │                     │
+ ├──────────────────────────────────────────────────>│                     │
+ │                            │                      │                     │
+ │ 5. POST finalize-and-start │                      │                     │
+ ├───────────────────────────>│                      │                     │
+ │                            │                      │                     │
+ │                            │ 6. Dispatch to broker│                     │
+ │                            │    + storagePath     │                     │
+ │                            ├──────────────────────────────────────────>│
+ │                            │                      │                     │
+ │                            │                      │  7. Download files  │
+ │                            │                      │<────────────────────┤
+ │                            │                      │                     │
+ │                            │                      │  8. Populate        │
+ │                            │                      │     workspace dir,  │
+ │                            │                      │     start container │
+ │                            │                      │                     │
+ │                            │ 9. Agent running     │                     │
+ │                            │<─────────────────────────────────────────│
+ │                            │                      │                     │
+ │ 10. Response: running      │                      │                     │
+ │<───────────────────────────│                      │                     │
+```
+
+#### 13.4.2 Key Differences from On-Demand Sync
+
+| Aspect | On-demand sync-to (existing) | Bootstrap sync-to (new) |
+|--------|------------------------------|-------------------------|
+| Agent status required | `running` | `provisioning` (new status) |
+| Triggered by | Explicit `scion sync to` | Automatic during `scion start` / `scion create` |
+| Workspace pre-exists | Yes (already mounted in container) | No (broker creates empty dir, populates from GCS) |
+| Finalize action | Tunnel apply to running container | Trigger broker to populate dir + start container |
+
+#### 13.4.3 Changes Required
+
+- **New agent status `provisioning`:** Agents in this status have been created in the Hub database but have not yet been dispatched to a broker. This allows the CLI to upload workspace content before the agent starts.
+- **Hub `handleWorkspaceSyncToFinalize` relaxation:** Accept agents in `provisioning` status (not just `running`) so the CLI can finalize the upload and trigger the start.
+- **`RemoteCreateAgentRequest` gains `WorkspaceStoragePath`:** Signals to the broker that it should download workspace content from GCS rather than using its local filesystem.
+- **Broker provisioning:** When `WorkspaceStoragePath` is set, the broker creates an empty workspace directory, downloads files from GCS into it, then starts the container with that directory mounted.
+
+### 13.5 CLI Decision Flow
+
+The CLI determines which bootstrap strategy to use automatically based on the grove type:
+
+```
+scion start my-agent "Fix the bug"
+    │
+    ├── Is Hub mode?
+    │       │
+    │      No ──> Local mode (unchanged, current behavior)
+    │       │
+    │      Yes
+    │       │
+    │       ├── Is grove a git repo?
+    │       │       │
+    │       │      Yes ── GIT BOOTSTRAP PATH ──┐
+    │       │       │                           │
+    │       │       ├── git remote get-url      │
+    │       │       │   origin → remoteURL      │
+    │       │       │                           │
+    │       │       ├── HEAD pushed to remote?  │
+    │       │       │       │                   │
+    │       │       │      No ──> ERROR:        │
+    │       │       │       │   "Push changes   │
+    │       │       │       │    first"          │
+    │       │       │       │                   │
+    │       │       │      Yes                  │
+    │       │       │       │                   │
+    │       │       ├── Uncommitted changes?    │
+    │       │       │       │                   │
+    │       │       │      Yes ──> WARNING       │
+    │       │       │       │   (proceed anyway) │
+    │       │       │       │                   │
+    │       │       │      No                   │
+    │       │       │       │                   │
+    │       │       └── Send CreateAgent with   │
+    │       │           gitRemoteURL + gitRef   │
+    │       │                                   │
+    │       │                                   │
+    │       └──No ── GCS BOOTSTRAP PATH ──┐     │
+    │               │                     │     │
+    │               ├── Collect files      │     │
+    │               │   (transfer.Collect) │     │
+    │               │                     │     │
+    │               ├── Send CreateAgent   │     │
+    │               │   with manifest      │     │
+    │               │                     │     │
+    │               ├── Upload to GCS via  │     │
+    │               │   signed URLs        │     │
+    │               │                     │     │
+    │               └── Finalize + start   │     │
+    │                                     │     │
+    └─────────────────────────────────────┘─────┘
+```
+
+### 13.6 Impact on Existing Components
+
+| Component | Change |
+|-----------|--------|
+| `cmd/create.go` / `cmd/common.go` | Add git validation logic; detect git vs non-git; populate new request fields |
+| `pkg/hubclient/types.go` | Add `GitRemoteURL`, `GitRef` to `CreateAgentRequest` |
+| `pkg/hub/handlers.go` | Pass new fields through to agent record and dispatch |
+| `pkg/hub/httpdispatcher.go` | Include `GitRemoteURL`, `GitRef`, `WorkspaceStoragePath` in `RemoteCreateAgentRequest` |
+| `pkg/hub/workspace_handlers.go` | Relax status check in `handleWorkspaceSyncToFinalize` to accept `provisioning` |
+| `pkg/runtimebroker/handlers.go` | Branch on `GitRemoteURL` vs `WorkspaceStoragePath` vs `GrovePath` for workspace resolution |
+| `pkg/agent/provision.go` | Factor out workspace resolution so broker can call git-remote path |
+| `pkg/store/models.go` | Store `GitRemoteURL`, `GitRef` on agent record |
+
+### 13.7 Open Questions
+
+| # | Question | Options | Notes |
+|---|----------|---------|-------|
+| Q1 | **Should the CLI block until the agent is fully provisioned (workspace populated + started)?** | (a) Yes, poll until running. (b) Return immediately with `provisioning` status. | For git bootstrap the clone may take time for large repos. For GCS bootstrap the CLI already blocks during upload. |
+| Q2 | **Should the broker cache bare clones across agents in the same grove?** | (a) Yes, shared `repos/<groveID>/` directory. (b) Per-agent clone. | Shared clone saves disk/network but needs locking for concurrent creates. |
+| Q3 | **How should `scion create` (without start) interact with bootstrap?** | (a) `create` does not bootstrap (workspace populated at `start` time). (b) `create` triggers bootstrap immediately. | Option (a) is simpler and matches the current `create` vs `start` distinction. |
+| Q4 | **Should submodules be supported in the git bootstrap path?** | (a) No, defer. (b) Yes, `--recurse-submodules` on clone. | Submodules add complexity; deferring is fine unless a use case demands it. |
+
+---
+
+## 14. Design Decisions
+
+### 14.1 Resolved Questions
 
 All open questions have been resolved with the following decisions:
 
@@ -1077,7 +1406,7 @@ All open questions have been resolved with the following decisions:
 | Q4 | **Large file handling?** | **No limit** | GCS handles large files natively. rclone supports resumable uploads. No artificial constraints needed. |
 | Q5 | **Shared package factoring?** | **Yes - `pkg/transfer`** | Consolidates duplicate code between templates and workspaces. ~60% code reuse. Foundation for future transfer needs. |
 
-### 13.2 Deferred Decisions
+### 14.2 Deferred Decisions
 
 | Question | Deferral Reason |
 |----------|-----------------|
@@ -1088,7 +1417,7 @@ All open questions have been resolved with the following decisions:
 
 ---
 
-## 14. Implementation Plan
+## 15. Implementation Plan
 
 ### Phase 0: Shared Transfer Package (Day 1)
 
@@ -1205,7 +1534,7 @@ Day 1          Day 2              Day 3              Day 4          Day 5
 
 ---
 
-## 15. References
+## 16. References
 
 ### Design Documents
 

@@ -29,7 +29,6 @@ import (
 
 var (
 	hubAuthHubURL    string
-	hubAuthHeadless  bool
 	hubAuthNoBrowser bool
 )
 
@@ -54,14 +53,13 @@ This command will:
 3. Wait for the OAuth callback
 4. Store credentials locally
 
-In headless environments (no display server), or when --headless or --no-browser
-is specified, the device authorization flow is used instead. This displays a URL
-and code that you can enter on any device with a browser.
+In headless environments (no display server), or when --no-browser is specified,
+the device authorization flow is used instead. This displays a URL and code
+that you can enter on any device with a browser.
 
 Example:
   scion hub auth login
   scion hub auth login --hub-url https://hub.example.com
-  scion hub auth login --headless
   scion hub auth login --no-browser`,
 	RunE: runHubAuthLogin,
 }
@@ -81,7 +79,6 @@ func init() {
 
 	// Flags for login command
 	hubAuthLoginCmd.Flags().StringVar(&hubAuthHubURL, "hub-url", "", "Hub server URL (defaults to configured endpoint)")
-	hubAuthLoginCmd.Flags().BoolVar(&hubAuthHeadless, "headless", false, "Force device flow authentication (for headless environments)")
 	hubAuthLoginCmd.Flags().BoolVar(&hubAuthNoBrowser, "no-browser", false, "Use device flow instead of opening a browser")
 }
 
@@ -105,7 +102,7 @@ func runHubAuthLogin(cmd *cobra.Command, args []string) error {
 
 	var tokenResp *hubclient.CLITokenResponse
 
-	if hubAuthHeadless || hubAuthNoBrowser || util.IsHeadlessEnvironment() {
+	if hubAuthNoBrowser || util.IsHeadlessEnvironment() {
 		// Device authorization flow for headless environments
 		deviceAuth := auth.NewDeviceFlowAuth(client.Auth())
 		tokenResp, err = deviceAuth.Authenticate(cmd.Context())

@@ -24,15 +24,13 @@ import (
 
 // ConfirmAction prompts user for Y/n confirmation.
 // Returns true if confirmed, false otherwise.
-// If autoConfirm is true, returns defaultYes without prompting.
+// If autoConfirm is true, always confirms Yes (proceeds with the action).
+// The defaultYes parameter only affects the interactive case: it controls
+// whether pressing Enter without input confirms (Y/n) or declines (y/N).
 func ConfirmAction(prompt string, defaultYes bool, autoConfirm bool) bool {
 	if autoConfirm {
-		if defaultYes {
-			fmt.Printf("%s: auto-confirmed Yes\n", prompt)
-		} else {
-			fmt.Printf("%s: auto-confirmed No\n", prompt)
-		}
-		return defaultYes
+		fmt.Printf("%s: auto-confirmed Yes\n", prompt)
+		return true
 	}
 
 	suffix := " (Y/n): "

@@ -16,6 +16,7 @@ package harness
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -24,6 +25,7 @@ import (
 
 	"github.com/ptone/scion-agent/pkg/api"
 	"github.com/ptone/scion-agent/pkg/config"
+	geminiEmbeds "github.com/ptone/scion-agent/pkg/harness/gemini"
 	"github.com/ptone/scion-agent/pkg/util"
 )
 
@@ -254,24 +256,38 @@ func (g *GeminiCLI) isValidPromptFile(path string) bool {
 }
 
 func (g *GeminiCLI) SeedTemplateDir(templateDir string, force bool) error {
-	if err := config.SeedCommonFiles(templateDir, "common", g.GetEmbedDir(), g.DefaultConfigDir(), force); err != nil {
+	if err := config.SeedCommonFiles(templateDir, g.DefaultConfigDir(), force); err != nil {
+		return err
+	}
+
+	embedsFS, basePath := g.GetHarnessEmbedsFS()
+	homeDir := filepath.Join(templateDir, "home")
+
+	// Seed scion-agent.yaml
+	if err := config.SeedFileFromFS(embedsFS, basePath, "scion-agent.yaml", filepath.Join(templateDir, "scion-agent.yaml"), force, false); err != nil {
+		return err
+	}
+
+	// Seed .bashrc
+	if err := config.SeedFileFromFS(embedsFS, basePath, "bashrc", filepath.Join(homeDir, ".bashrc"), force, false); err != nil {
+		return err
+	}
+
+	// Seed settings.json (always overwrite)
+	if err := config.SeedFileFromFS(embedsFS, basePath, "settings.json", filepath.Join(homeDir, g.DefaultConfigDir(), "settings.json"), force, true); err != nil {
+		return err
+	}
+
+	// Seed system_prompt.md
+	if err := config.SeedFileFromFS(embedsFS, basePath, "system_prompt.md", filepath.Join(homeDir, g.DefaultConfigDir(), "system_prompt.md"), force, false); err != nil {
 		return err
 	}
 
 	// Seed gemini.md
-	homeDir := filepath.Join(templateDir, "home")
-	mdPath := filepath.Join(homeDir, g.DefaultConfigDir(), "gemini.md")
-
-	data, err := config.EmbedsFS.ReadFile(filepath.Join("embeds", g.GetEmbedDir(), "gemini.md"))
-	if err != nil {
-		return nil
+	if err := config.SeedFileFromFS(embedsFS, basePath, "gemini.md", filepath.Join(homeDir, g.DefaultConfigDir(), "gemini.md"), force, false); err != nil {
+		return err
 	}
 
-	if _, err := os.Stat(mdPath); os.IsNotExist(err) || force {
-		if err := os.WriteFile(mdPath, data, 0644); err != nil {
-			return fmt.Errorf("failed to write gemini.md: %w", err)
-		}
-	}
 	return nil
 }
 
@@ -391,4 +407,8 @@ func (g *GeminiCLI) GetEmbedDir() string {
 
 func (g *GeminiCLI) GetInterruptKey() string {
 	return "C-c"
+}
+
+func (g *GeminiCLI) GetHarnessEmbedsFS() (embed.FS, string) {
+	return geminiEmbeds.EmbedsFS, "embeds"
 }

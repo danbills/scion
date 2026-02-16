@@ -16,14 +16,15 @@ package harness
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/ptone/scion-agent/pkg/api"
 	"github.com/ptone/scion-agent/pkg/config"
+	claudeEmbeds "github.com/ptone/scion-agent/pkg/harness/claude"
 	"github.com/ptone/scion-agent/pkg/util"
 )
 
@@ -77,31 +78,36 @@ func (c *ClaudeCode) HasSystemPrompt(agentHome string) bool {
 }
 
 func (c *ClaudeCode) SeedTemplateDir(templateDir string, force bool) error {
-	if err := config.SeedCommonFiles(templateDir, "common", c.GetEmbedDir(), c.DefaultConfigDir(), force); err != nil {
+	if err := config.SeedCommonFiles(templateDir, c.DefaultConfigDir(), force); err != nil {
 		return err
 	}
 
+	embedsFS, basePath := c.GetHarnessEmbedsFS()
 	homeDir := filepath.Join(templateDir, "home")
 
-	// Seed claude.md
-	mdPath := filepath.Join(homeDir, c.DefaultConfigDir(), "claude.md")
-	mdData, err := config.EmbedsFS.ReadFile(filepath.Join("embeds", c.GetEmbedDir(), "claude.md"))
-	if err == nil {
-		if _, err := os.Stat(mdPath); os.IsNotExist(err) || force {
-			if err := os.WriteFile(mdPath, mdData, 0644); err != nil {
-				return fmt.Errorf("failed to write claude.md: %w", err)
-			}
-		}
+	// Seed scion-agent.yaml
+	if err := config.SeedFileFromFS(embedsFS, basePath, "scion-agent.yaml", filepath.Join(templateDir, "scion-agent.yaml"), force, false); err != nil {
+		return err
 	}
 
-	// Seed .claude.json
-	claudeJSONPath := filepath.Join(homeDir, ".claude.json")
-	claudeJSONData, err := config.EmbedsFS.ReadFile(filepath.Join("embeds", c.GetEmbedDir(), ".claude.json"))
-	if err == nil {
-		// Always write .claude.json to ensure it matches current defaults
-		if err := os.WriteFile(claudeJSONPath, claudeJSONData, 0644); err != nil {
-			return fmt.Errorf("failed to write .claude.json: %w", err)
-		}
+	// Seed .bashrc
+	if err := config.SeedFileFromFS(embedsFS, basePath, "bashrc", filepath.Join(homeDir, ".bashrc"), force, false); err != nil {
+		return err
+	}
+
+	// Seed settings.json (always overwrite)
+	if err := config.SeedFileFromFS(embedsFS, basePath, "settings.json", filepath.Join(homeDir, c.DefaultConfigDir(), "settings.json"), force, true); err != nil {
+		return err
+	}
+
+	// Seed claude.md
+	if err := config.SeedFileFromFS(embedsFS, basePath, "claude.md", filepath.Join(homeDir, c.DefaultConfigDir(), "claude.md"), force, false); err != nil {
+		return err
+	}
+
+	// Seed .claude.json (always overwrite)
+	if err := config.SeedFileFromFS(embedsFS, basePath, ".claude.json", filepath.Join(homeDir, ".claude.json"), force, true); err != nil {
+		return err
 	}
 
 	return nil
@@ -178,4 +184,8 @@ func (c *ClaudeCode) GetEmbedDir() string {
 
 func (c *ClaudeCode) GetInterruptKey() string {
 	return "Escape"
+}
+
+func (c *ClaudeCode) GetHarnessEmbedsFS() (embed.FS, string) {
+	return claudeEmbeds.EmbedsFS, "embeds"
 }

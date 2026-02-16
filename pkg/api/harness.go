@@ -16,6 +16,7 @@ package api
 
 import (
 	"context"
+	"embed"
 )
 
 // Harness interface defines the methods a harness must implement
@@ -42,4 +43,8 @@ type Harness interface {
 
 	// GetInterruptKey returns the key sequence used to interrupt the harness process (e.g., "C-c" or "Escape").
 	GetInterruptKey() string
+
+	// GetHarnessEmbedsFS returns the embedded filesystem containing default harness-config files
+	// and the base path within it (e.g., "embeds").
+	GetHarnessEmbedsFS() (embed.FS, string)
 }

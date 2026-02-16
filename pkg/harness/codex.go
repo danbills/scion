@@ -16,12 +16,14 @@ package harness
 
 import (
 	"context"
+	"embed"
 	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/ptone/scion-agent/pkg/api"
 	"github.com/ptone/scion-agent/pkg/config"
+	codexEmbeds "github.com/ptone/scion-agent/pkg/harness/codex"
 	"github.com/ptone/scion-agent/pkg/util"
 )
 
@@ -32,25 +34,32 @@ func (c *Codex) Name() string {
 }
 
 func (c *Codex) SeedTemplateDir(templateDir string, force bool) error {
-	if err := config.SeedCommonFiles(templateDir, "common", c.GetEmbedDir(), c.DefaultConfigDir(), force); err != nil {
+	if err := config.SeedCommonFiles(templateDir, c.DefaultConfigDir(), force); err != nil {
 		return err
 	}
 
+	embedsFS, basePath := c.GetHarnessEmbedsFS()
 	homeDir := filepath.Join(templateDir, "home")
+
+	// Seed scion-agent.yaml
+	if err := config.SeedFileFromFS(embedsFS, basePath, "scion-agent.yaml", filepath.Join(templateDir, "scion-agent.yaml"), force, false); err != nil {
+		return err
+	}
+
+	// Seed .bashrc
+	if err := config.SeedFileFromFS(embedsFS, basePath, "bashrc", filepath.Join(homeDir, ".bashrc"), force, false); err != nil {
+		return err
+	}
+
+	// Seed config.toml (always overwrite)
 	codexDir := filepath.Join(homeDir, ".codex")
 	if err := os.MkdirAll(codexDir, 0755); err != nil {
 		return err
 	}
-
-	// Seed config.toml
-	tomlPath := filepath.Join(codexDir, "config.toml")
-	data, err := config.EmbedsFS.ReadFile(filepath.Join("embeds", c.GetEmbedDir(), "config.toml"))
-	if err == nil {
-		// Always write config.toml
-		if err := os.WriteFile(tomlPath, data, 0644); err != nil {
-			return fmt.Errorf("failed to write config.toml: %w", err)
-		}
+	if err := config.SeedFileFromFS(embedsFS, basePath, "config.toml", filepath.Join(codexDir, "config.toml"), force, true); err != nil {
+		return err
 	}
+
 	return nil
 }
 
@@ -131,4 +140,8 @@ func (c *Codex) GetEmbedDir() string {
 
 func (c *Codex) GetInterruptKey() string {
 	return "C-c"
+}
+
+func (c *Codex) GetHarnessEmbedsFS() (embed.FS, string) {
+	return codexEmbeds.EmbedsFS, "embeds"
 }

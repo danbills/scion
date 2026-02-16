@@ -1,0 +1,3 @@
+harness: claude
+image: us-central1-docker.pkg.dev/ptone-misc/public-docker/scion-claude:latest
+user: scion

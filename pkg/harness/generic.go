@@ -16,6 +16,7 @@ package harness
 
 import (
 	"context"
+	"embed"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -28,7 +29,7 @@ import (
 type Generic struct{}
 
 func (g *Generic) SeedTemplateDir(templateDir string, force bool) error {
-	return config.SeedCommonFiles(templateDir, "common", g.GetEmbedDir(), g.DefaultConfigDir(), force)
+	return config.SeedCommonFiles(templateDir, g.DefaultConfigDir(), force)
 }
 
 func (g *Generic) Name() string {
@@ -176,4 +177,8 @@ func (g *Generic) GetEmbedDir() string {
 
 func (g *Generic) GetInterruptKey() string {
 	return "C-c"
+}
+
+func (g *Generic) GetHarnessEmbedsFS() (embed.FS, string) {
+	return embed.FS{}, ""
 }

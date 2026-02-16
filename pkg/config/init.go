@@ -83,9 +83,10 @@ func GetDefaultSettingsData() ([]byte, error) {
 }
 
 // SeedCommonFiles seeds the common files for a harness template.
-// genericEmbedDir is usually "common".
-// specificEmbedDir is the harness specific dir in embeds (e.g. "gemini").
-func SeedCommonFiles(templateDir, genericEmbedDir, specificEmbedDir, configDirName string, force bool) error {
+// It creates the base directory structure and writes only common files
+// (.tmux.conf, .zshrc) that are shared across all harnesses.
+// Harness-specific file seeding is handled by each harness's SeedTemplateDir().
+func SeedCommonFiles(templateDir, configDirName string, force bool) error {
 	homeDir := filepath.Join(templateDir, "home")
 	// Create directories
 	dirs := []string{
@@ -103,81 +104,30 @@ func SeedCommonFiles(templateDir, genericEmbedDir, specificEmbedDir, configDirNa
 		}
 	}
 
-	// Helper to read embedded file
-	readEmbed := func(dir, name string) string {
-		data, err := EmbedsFS.ReadFile(filepath.Join("embeds", dir, name))
+	// Helper to read common embedded file
+	readCommonEmbed := func(name string) string {
+		data, err := EmbedsFS.ReadFile(filepath.Join("embeds", "common", name))
 		if err != nil {
-			// Fallback to gemini if not found in specific dir
-			// Only fallback for non-opencode harnesses
-			if dir != "opencode" {
-				data, err = EmbedsFS.ReadFile(filepath.Join("embeds", "gemini", name))
-				if err == nil {
-					return string(data)
-				}
-			}
 			return ""
 		}
 		return string(data)
 	}
 
-	// Helper to read scion-agent config, preferring YAML over JSON
-	readScionAgentConfig := func(dir string) string {
-		// Try YAML first
-		data, err := EmbedsFS.ReadFile(filepath.Join("embeds", dir, "scion-agent.yaml"))
-		if err == nil {
-			return string(data)
-		}
-		// Fall back to JSON
-		data, err = EmbedsFS.ReadFile(filepath.Join("embeds", dir, "scion-agent.json"))
-		if err == nil {
-			return string(data)
-		}
-		// Fallback to gemini if not found (except for opencode)
-		if dir != "opencode" {
-			data, err = EmbedsFS.ReadFile(filepath.Join("embeds", "gemini", "scion-agent.yaml"))
-			if err == nil {
-				return string(data)
-			}
-			data, err = EmbedsFS.ReadFile(filepath.Join("embeds", "gemini", "scion-agent.json"))
-			if err == nil {
-				return string(data)
-			}
-		}
-		return ""
-	}
-
-	// Read scion-agent config (YAML or JSON)
-	scionAgentConfigStr := readScionAgentConfig(specificEmbedDir)
-
-	// Seed template files
+	// Seed common template files
 	files := []struct {
 		path    string
 		content string
 		mode    os.FileMode
 	}{
-		{filepath.Join(templateDir, "scion-agent.yaml"), scionAgentConfigStr, 0644},
-		{filepath.Join(homeDir, ".bashrc"), readEmbed(specificEmbedDir, "bashrc"), 0644},
-		{filepath.Join(homeDir, ".tmux.conf"), readEmbed(genericEmbedDir, ".tmux.conf"), 0644},
-	}
-
-	if configDirName != "" {
-		files = append(files, []struct {
-			path    string
-			content string
-			mode    os.FileMode
-		}{
-			{filepath.Join(homeDir, configDirName, "settings.json"), readEmbed(specificEmbedDir, "settings.json"), 0644},
-			{filepath.Join(homeDir, configDirName, "system_prompt.md"), readEmbed(specificEmbedDir, "system_prompt.md"), 0644},
-		}...)
+		{filepath.Join(homeDir, ".tmux.conf"), readCommonEmbed(".tmux.conf"), 0644},
+		{filepath.Join(homeDir, ".zshrc"), readCommonEmbed("zshrc"), 0644},
 	}
 
 	for _, f := range files {
 		if f.content == "" {
 			continue
 		}
-		baseName := filepath.Base(f.path)
-		// Force overwrite for critical config files
-		if force || baseName == "settings.json" {
+		if force {
 			if err := os.WriteFile(f.path, []byte(f.content), f.mode); err != nil {
 				return fmt.Errorf("failed to write file %s: %w", f.path, err)
 			}
@@ -191,6 +141,31 @@ func SeedCommonFiles(templateDir, genericEmbedDir, specificEmbedDir, configDirNa
 		}
 	}
 
+	return nil
+}
+
+// SeedFileFromFS writes a file from an embed.FS to a target path.
+// If force is true, the file is always overwritten. Otherwise, it is only
+// written if it does not already exist. alwaysOverwrite can be set to true
+// for critical config files that should always match embedded defaults.
+func SeedFileFromFS(fs embed.FS, basePath, fileName, targetPath string, force, alwaysOverwrite bool) error {
+	data, err := fs.ReadFile(filepath.Join(basePath, fileName))
+	if err != nil {
+		return nil // File not in embeds, skip silently
+	}
+
+	if force || alwaysOverwrite {
+		if err := os.WriteFile(targetPath, data, 0644); err != nil {
+			return fmt.Errorf("failed to write file %s: %w", targetPath, err)
+		}
+		return nil
+	}
+
+	if _, err := os.Stat(targetPath); os.IsNotExist(err) {
+		if err := os.WriteFile(targetPath, data, 0644); err != nil {
+			return fmt.Errorf("failed to write file %s: %w", targetPath, err)
+		}
+	}
 	return nil
 }
 
@@ -289,12 +264,18 @@ func InitProject(targetDir string, harnesses []api.Harness) error {
 
 	templatesDir := filepath.Join(projectDir, "templates")
 	agentsDir := filepath.Join(projectDir, "agents")
+	harnessConfigsDir := filepath.Join(projectDir, harnessConfigsDirName)
 
 	if err := os.MkdirAll(agentsDir, 0755); err != nil {
 		return fmt.Errorf("failed to create agents directory: %w", err)
 	}
 
 	for _, h := range harnesses {
+		// Seed harness-config directory
+		if err := SeedHarnessConfig(filepath.Join(harnessConfigsDir, h.Name()), h, false); err != nil {
+			return fmt.Errorf("failed to seed %s harness-config: %w", h.Name(), err)
+		}
+		// Keep existing template seeding for backward compatibility
 		if err := h.SeedTemplateDir(filepath.Join(templatesDir, h.Name()), false); err != nil {
 			return fmt.Errorf("failed to seed %s template: %w", h.Name(), err)
 		}
@@ -333,12 +314,18 @@ func InitGlobal(harnesses []api.Harness) error {
 
 	templatesDir := filepath.Join(globalDir, "templates")
 	agentsDir := filepath.Join(globalDir, "agents")
+	harnessConfigsDir := filepath.Join(globalDir, harnessConfigsDirName)
 
 	if err := os.MkdirAll(agentsDir, 0755); err != nil {
 		return fmt.Errorf("failed to create global agents directory: %w", err)
 	}
 
 	for _, h := range harnesses {
+		// Seed harness-config directory
+		if err := SeedHarnessConfig(filepath.Join(harnessConfigsDir, h.Name()), h, false); err != nil {
+			return fmt.Errorf("failed to seed global %s harness-config: %w", h.Name(), err)
+		}
+		// Keep existing template seeding for backward compatibility
 		if err := h.SeedTemplateDir(filepath.Join(templatesDir, h.Name()), false); err != nil {
 			return fmt.Errorf("failed to seed global %s template: %w", h.Name(), err)
 		}

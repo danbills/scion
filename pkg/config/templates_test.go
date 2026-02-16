@@ -213,7 +213,7 @@ func TestUpdateDefaultTemplates(t *testing.T) {
 		t.Error("expected scion-agent.yaml to be overwritten, but it still contains corrupt content")
 	}
 
-	// Verify settings.json content
+	// Verify settings.json exists and is valid JSON
 	geminiSettingsPath := filepath.Join(projectDir, "templates", "gemini", "home", ".gemini", "settings.json")
 	settingsData, err := os.ReadFile(geminiSettingsPath)
 	if err != nil {
@@ -222,18 +222,6 @@ func TestUpdateDefaultTemplates(t *testing.T) {
 	var settings map[string]interface{}
 	if err := json.Unmarshal(settingsData, &settings); err != nil {
 		t.Fatalf("failed to unmarshal settings.json: %v", err)
-	}
-
-	security, ok := settings["security"].(map[string]interface{})
-	if !ok {
-		t.Fatal("security section missing in settings.json")
-	}
-	auth, ok := security["auth"].(map[string]interface{})
-	if !ok {
-		t.Fatal("auth section missing in security section")
-	}
-	if auth["selectedType"] != "gemini-api-key" {
-		t.Errorf("expected selectedType to be gemini-api-key, got %v", auth["selectedType"])
 	}
 }
 

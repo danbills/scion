@@ -1,0 +1,227 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package config
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestLoadHarnessConfigDir(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create a valid harness-config directory
+	configDir := filepath.Join(tmpDir, "claude")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	configYAML := `harness: claude
+image: us-central1-docker.pkg.dev/ptone-misc/public-docker/scion-claude:latest
+user: scion
+`
+	if err := os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(configYAML), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	hc, err := LoadHarnessConfigDir(configDir)
+	if err != nil {
+		t.Fatalf("LoadHarnessConfigDir failed: %v", err)
+	}
+
+	if hc.Name != "claude" {
+		t.Errorf("expected name 'claude', got %q", hc.Name)
+	}
+	if hc.Config.Harness != "claude" {
+		t.Errorf("expected harness 'claude', got %q", hc.Config.Harness)
+	}
+	if hc.Config.Image != "us-central1-docker.pkg.dev/ptone-misc/public-docker/scion-claude:latest" {
+		t.Errorf("expected image to be set, got %q", hc.Config.Image)
+	}
+	if hc.Config.User != "scion" {
+		t.Errorf("expected user 'scion', got %q", hc.Config.User)
+	}
+}
+
+func TestLoadHarnessConfigDir_NotFound(t *testing.T) {
+	_, err := LoadHarnessConfigDir("/nonexistent/path")
+	if err == nil {
+		t.Fatal("expected error for nonexistent directory")
+	}
+}
+
+func TestLoadHarnessConfigDir_MissingConfigYAML(t *testing.T) {
+	tmpDir := t.TempDir()
+	configDir := filepath.Join(tmpDir, "empty")
+	os.MkdirAll(configDir, 0755)
+
+	_, err := LoadHarnessConfigDir(configDir)
+	if err == nil {
+		t.Fatal("expected error for missing config.yaml")
+	}
+}
+
+func TestFindHarnessConfigDir(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Setup grove-level harness-config
+	grovePath := filepath.Join(tmpDir, "grove")
+	groveHCDir := filepath.Join(grovePath, harnessConfigsDirName, "claude")
+	if err := os.MkdirAll(groveHCDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	groveConfigYAML := `harness: claude
+image: grove-image:latest
+user: scion
+`
+	if err := os.WriteFile(filepath.Join(groveHCDir, "config.yaml"), []byte(groveConfigYAML), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Override HOME so GetGlobalDir resolves to our temp dir
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
+	// Test: grove-level takes precedence
+	hc, err := FindHarnessConfigDir("claude", grovePath)
+	if err != nil {
+		t.Fatalf("FindHarnessConfigDir failed: %v", err)
+	}
+	if hc.Config.Image != "grove-image:latest" {
+		t.Errorf("expected grove-level image, got %q", hc.Config.Image)
+	}
+
+	// Setup global harness-config at ~/.scion/harness-configs/gemini/
+	globalScionDir := filepath.Join(tmpDir, DotScion, harnessConfigsDirName, "gemini")
+	if err := os.MkdirAll(globalScionDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	geminiConfig := `harness: gemini
+image: gemini-global:latest
+user: scion
+`
+	if err := os.WriteFile(filepath.Join(globalScionDir, "config.yaml"), []byte(geminiConfig), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Test: falls back to global when no grove match
+	hc, err = FindHarnessConfigDir("gemini", "")
+	if err != nil {
+		t.Fatalf("FindHarnessConfigDir for global gemini failed: %v", err)
+	}
+	if hc.Config.Image != "gemini-global:latest" {
+		t.Errorf("expected global image, got %q", hc.Config.Image)
+	}
+
+	// Test: not found
+	_, err = FindHarnessConfigDir("nonexistent", grovePath)
+	if err == nil {
+		t.Fatal("expected error for nonexistent harness-config")
+	}
+}
+
+func TestListHarnessConfigDirs(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Override HOME
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
+	// Setup global harness-configs
+	globalBase := filepath.Join(tmpDir, DotScion, harnessConfigsDirName)
+	for _, name := range []string{"claude", "gemini"} {
+		dir := filepath.Join(globalBase, name)
+		os.MkdirAll(dir, 0755)
+		os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("harness: "+name+"\n"), 0644)
+	}
+
+	// Setup grove-level harness-config (overrides global claude, adds codex)
+	grovePath := filepath.Join(tmpDir, "grove")
+	groveBase := filepath.Join(grovePath, harnessConfigsDirName)
+	for _, name := range []string{"claude", "codex"} {
+		dir := filepath.Join(groveBase, name)
+		os.MkdirAll(dir, 0755)
+		os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("harness: "+name+"\nimage: grove-"+name+"\n"), 0644)
+	}
+
+	configs, err := ListHarnessConfigDirs(grovePath)
+	if err != nil {
+		t.Fatalf("ListHarnessConfigDirs failed: %v", err)
+	}
+
+	if len(configs) != 3 {
+		t.Fatalf("expected 3 configs (claude, codex, gemini), got %d", len(configs))
+	}
+
+	// Should be sorted alphabetically
+	names := make([]string, len(configs))
+	for i, c := range configs {
+		names[i] = c.Name
+	}
+	expected := []string{"claude", "codex", "gemini"}
+	for i, name := range expected {
+		if names[i] != name {
+			t.Errorf("expected configs[%d].Name = %q, got %q", i, name, names[i])
+		}
+	}
+
+	// Grove claude should override global claude
+	for _, c := range configs {
+		if c.Name == "claude" && c.Config.Image != "grove-claude" {
+			t.Errorf("expected grove-level claude image, got %q", c.Config.Image)
+		}
+	}
+}
+
+func TestSeedHarnessConfig_MockHarness(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Mock harnesses return empty embed FS, so SeedHarnessConfig
+	// should return nil without creating directories (no embeds to seed).
+	harnesses := GetMockHarnesses()
+
+	for _, h := range harnesses {
+		hcDir := filepath.Join(tmpDir, "hc", h.Name())
+		err := SeedHarnessConfig(hcDir, h, false)
+		if err != nil {
+			t.Errorf("SeedHarnessConfig(%s) failed: %v", h.Name(), err)
+		}
+	}
+}
+
+func TestSeedHarnessConfigFromFS(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Use the config package's own EmbedsFS to test SeedHarnessConfigFromFS
+	// with the common embed FS. Since we only have common files left in config embeds,
+	// we test the mechanism with what's available.
+	targetDir := filepath.Join(tmpDir, "test-config")
+
+	err := SeedHarnessConfigFromFS(targetDir, EmbedsFS, "embeds/common", ".test-config", false)
+	if err != nil {
+		t.Fatalf("SeedHarnessConfigFromFS failed: %v", err)
+	}
+
+	// Verify directory structure was created
+	if _, err := os.Stat(filepath.Join(targetDir, "home")); err != nil {
+		t.Error("expected home directory to be created")
+	}
+	if _, err := os.Stat(filepath.Join(targetDir, "home", ".test-config")); err != nil {
+		t.Error("expected config directory to be created")
+	}
+}

@@ -16,12 +16,14 @@ package harness
 
 import (
 	"context"
+	"embed"
 	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/ptone/scion-agent/pkg/api"
 	"github.com/ptone/scion-agent/pkg/config"
+	opencodeEmbeds "github.com/ptone/scion-agent/pkg/harness/opencode"
 	"github.com/ptone/scion-agent/pkg/util"
 )
 
@@ -32,21 +34,23 @@ func (o *OpenCode) Name() string {
 }
 
 func (o *OpenCode) SeedTemplateDir(templateDir string, force bool) error {
-	if err := config.SeedCommonFiles(templateDir, "common", o.GetEmbedDir(), o.DefaultConfigDir(), force); err != nil {
+	if err := config.SeedCommonFiles(templateDir, o.DefaultConfigDir(), force); err != nil {
 		return err
 	}
 
-	// Seed opencode.json
+	embedsFS, basePath := o.GetHarnessEmbedsFS()
 	homeDir := filepath.Join(templateDir, "home")
-	jsonPath := filepath.Join(homeDir, o.DefaultConfigDir(), "opencode.json")
 
-	data, err := config.EmbedsFS.ReadFile(filepath.Join("embeds", o.GetEmbedDir(), "opencode.json"))
-	if err == nil {
-		// Always write opencode.json
-		if err := os.WriteFile(jsonPath, data, 0644); err != nil {
-			return fmt.Errorf("failed to write opencode.json: %w", err)
-		}
+	// Seed scion-agent.yaml
+	if err := config.SeedFileFromFS(embedsFS, basePath, "scion-agent.yaml", filepath.Join(templateDir, "scion-agent.yaml"), force, false); err != nil {
+		return err
 	}
+
+	// Seed opencode.json (always overwrite)
+	if err := config.SeedFileFromFS(embedsFS, basePath, "opencode.json", filepath.Join(homeDir, o.DefaultConfigDir(), "opencode.json"), force, true); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -129,4 +133,8 @@ func (o *OpenCode) GetEmbedDir() string {
 
 func (o *OpenCode) GetInterruptKey() string {
 	return "C-c"
+}
+
+func (o *OpenCode) GetHarnessEmbedsFS() (embed.FS, string) {
+	return opencodeEmbeds.EmbedsFS, "embeds"
 }

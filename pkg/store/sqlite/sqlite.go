@@ -43,6 +43,11 @@ func New(dbPath string) (*SQLiteStore, error) {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
+	// Limit to a single connection so that per-connection PRAGMAs
+	// (foreign_keys, journal_mode) are applied consistently. SQLite
+	// serializes writes anyway, so this has no performance impact.
+	db.SetMaxOpenConns(1)
+
 	// Enable foreign keys and WAL mode for better performance
 	if _, err := db.Exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;"); err != nil {
 		db.Close()

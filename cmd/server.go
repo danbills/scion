@@ -643,18 +643,12 @@ func runServerStart(cmd *cobra.Command, args []string) error {
 					CreatedAt: time.Now(),
 					Status:    store.BrokerSecretStatusActive,
 				}
+				// Delete any stale secret first (idempotent: ignore ErrNotFound on fresh DB)
+				if err := s.DeleteBrokerSecret(ctx, brokerID); err != nil && err != store.ErrNotFound {
+					log.Printf("Warning: failed to delete old broker secret: %v", err)
+				}
 				if err := s.CreateBrokerSecret(ctx, brokerSecret); err != nil {
-					// If already exists, try to update it
-					if err == store.ErrAlreadyExists {
-						brokerSecret.RotatedAt = time.Now()
-						if updateErr := s.UpdateBrokerSecret(ctx, brokerSecret); updateErr != nil {
-							log.Printf("Warning: failed to update broker secret for co-located mode: %v", updateErr)
-						} else {
-							log.Printf("Updated broker secret for co-located control channel")
-						}
-					} else {
-						log.Printf("Warning: failed to create broker secret for co-located mode: %v", err)
-					}
+					log.Printf("Warning: failed to create broker secret for co-located mode: %v", err)
 				} else {
 					log.Printf("Created broker secret for co-located control channel")
 				}

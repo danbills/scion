@@ -897,9 +897,12 @@ func containsIgnoreCase(s, substr string) bool {
 	return strings.Contains(strings.ToLower(s), strings.ToLower(substr))
 }
 
-// cleanupGroveBrokerCredentials removes stale hub.brokerId and hub.brokerToken from
-// grove settings. These should only exist in global settings, not grove-specific.
+// cleanupGroveBrokerCredentials removes stale broker credentials from grove settings.
+// These should only exist in global settings, not grove-specific.
 // Earlier versions of scion incorrectly wrote them to grove settings.
+//
+// For legacy files: removes hub.brokerId and hub.brokerToken
+// For v1 files: removes server.broker.broker_id and server.broker.broker_token
 func cleanupGroveBrokerCredentials(grovePath string) {
 	settingsPath := config.GetSettingsPath(grovePath)
 	if settingsPath == "" {
@@ -911,7 +914,49 @@ func cleanupGroveBrokerCredentials(grovePath string) {
 		return
 	}
 
-	// Check if the file contains brokerId or brokerToken
+	// Detect format
+	version, _ := config.DetectSettingsFormat(data)
+
+	if version != "" {
+		// V1 versioned format: check for broker_id/broker_token under server.broker
+		content := string(data)
+		if !strings.Contains(content, "broker_id") && !strings.Contains(content, "broker_token") {
+			return
+		}
+
+		vs, err := config.LoadSingleFileVersioned(grovePath)
+		if err != nil {
+			debugf("Warning: failed to load v1 grove settings: %v", err)
+			return
+		}
+
+		if vs.Server == nil || vs.Server.Broker == nil {
+			return
+		}
+
+		modified := false
+		if vs.Server.Broker.BrokerID != "" {
+			vs.Server.Broker.BrokerID = ""
+			modified = true
+			debugf("Removed stale server.broker.broker_id from grove settings")
+		}
+		if vs.Server.Broker.BrokerToken != "" {
+			vs.Server.Broker.BrokerToken = ""
+			modified = true
+			debugf("Removed stale server.broker.broker_token from grove settings")
+		}
+
+		if !modified {
+			return
+		}
+
+		if err := config.SaveVersionedSettings(grovePath, vs); err != nil {
+			debugf("Warning: failed to write cleaned v1 settings: %v", err)
+		}
+		return
+	}
+
+	// Legacy format: check for brokerId/brokerToken under hub
 	content := string(data)
 	if !strings.Contains(content, "brokerId") && !strings.Contains(content, "brokerToken") {
 		return

@@ -646,6 +646,132 @@ func TestSyncResult_ServerTime(t *testing.T) {
 	}
 }
 
+// --- cleanupGroveBrokerCredentials tests ---
+
+func TestCleanupGroveBrokerCredentials_Legacy(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Write legacy settings with stale broker credentials
+	legacyContent := `active_profile: local
+hub:
+  endpoint: https://hub.example.com
+  brokerId: stale-broker-id
+  brokerToken: stale-broker-token
+  groveId: my-grove
+`
+	if err := os.WriteFile(filepath.Join(tmpDir, "settings.yaml"), []byte(legacyContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cleanupGroveBrokerCredentials(tmpDir)
+
+	// Read back and verify broker credentials were removed
+	data, err := os.ReadFile(filepath.Join(tmpDir, "settings.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	content := string(data)
+	if strings.Contains(content, "brokerId") {
+		t.Error("brokerId should have been removed from legacy settings")
+	}
+	if strings.Contains(content, "brokerToken") {
+		t.Error("brokerToken should have been removed from legacy settings")
+	}
+	// Other hub fields should be preserved
+	if !strings.Contains(content, "endpoint") {
+		t.Error("hub.endpoint should be preserved")
+	}
+	if !strings.Contains(content, "groveId") {
+		t.Error("hub.groveId should be preserved")
+	}
+}
+
+func TestCleanupGroveBrokerCredentials_V1(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Write v1 settings with stale broker credentials in server.broker
+	v1Content := `schema_version: "1"
+active_profile: local
+hub:
+  endpoint: https://hub.example.com
+  grove_id: my-grove
+server:
+  broker:
+    broker_id: stale-broker-id
+    broker_token: stale-broker-token
+    enabled: true
+    port: 9800
+`
+	if err := os.WriteFile(filepath.Join(tmpDir, "settings.yaml"), []byte(v1Content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cleanupGroveBrokerCredentials(tmpDir)
+
+	// Read back and verify broker credentials were removed
+	data, err := os.ReadFile(filepath.Join(tmpDir, "settings.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify it's still v1
+	version, _ := config.DetectSettingsFormat(data)
+	if version != "1" {
+		t.Errorf("expected v1 format, got version %q", version)
+	}
+
+	content := string(data)
+	if strings.Contains(content, "stale-broker-id") {
+		t.Error("broker_id value should have been removed from v1 settings")
+	}
+	if strings.Contains(content, "stale-broker-token") {
+		t.Error("broker_token value should have been removed from v1 settings")
+	}
+	// Other fields should be preserved
+	if !strings.Contains(content, "endpoint") {
+		t.Error("hub.endpoint should be preserved")
+	}
+	if !strings.Contains(content, "grove_id") {
+		t.Error("hub.grove_id should be preserved")
+	}
+}
+
+func TestCleanupGroveBrokerCredentials_V1_NoBrokerCreds(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Write v1 settings WITHOUT broker credentials
+	v1Content := `schema_version: "1"
+active_profile: local
+hub:
+  endpoint: https://hub.example.com
+  grove_id: my-grove
+`
+	if err := os.WriteFile(filepath.Join(tmpDir, "settings.yaml"), []byte(v1Content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Should be a no-op
+	cleanupGroveBrokerCredentials(tmpDir)
+
+	// Verify file is unchanged
+	data, err := os.ReadFile(filepath.Join(tmpDir, "settings.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	version, _ := config.DetectSettingsFormat(data)
+	if version != "1" {
+		t.Errorf("expected v1 format, got version %q", version)
+	}
+}
+
+func TestCleanupGroveBrokerCredentials_NoFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	// Should not panic or error on missing file
+	cleanupGroveBrokerCredentials(tmpDir)
+}
+
 func TestRFC3339Nano_BackwardCompatible(t *testing.T) {
 	// Verify that RFC3339Nano can parse both old (RFC3339) and new (RFC3339Nano) formats
 	tests := []struct {

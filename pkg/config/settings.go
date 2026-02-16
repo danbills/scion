@@ -508,6 +508,8 @@ func SaveSettingsJSON(grovePath string, settings *Settings, global bool) error {
 
 // UpdateSetting updates a specific setting key in the specified scope (global or local).
 // It reads from existing settings file (YAML or JSON) and writes to YAML format.
+// If the existing file is in v1 versioned format (has schema_version), it delegates
+// to UpdateVersionedSetting to preserve the format.
 func UpdateSetting(grovePath string, key string, value string, global bool) error {
 	var dir string
 	if global {
@@ -527,7 +529,18 @@ func UpdateSetting(grovePath string, key string, value string, global bool) erro
 	existingPath := GetSettingsPath(dir)
 	targetPath := filepath.Join(dir, "settings.yaml")
 
-	// Load existing file specifically (not merged)
+	// Check if the existing file is in v1 versioned format
+	if existingPath != "" {
+		data, err := os.ReadFile(existingPath)
+		if err == nil {
+			if version, _ := DetectSettingsFormat(data); version != "" {
+				// Delegate to versioned handler to preserve v1 format
+				return UpdateVersionedSetting(dir, key, value)
+			}
+		}
+	}
+
+	// Legacy path: load existing file specifically (not merged)
 	var current Settings
 	if existingPath != "" {
 		data, err := os.ReadFile(existingPath)

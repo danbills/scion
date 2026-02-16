@@ -1085,6 +1085,138 @@ type MigrationResult struct {
 	SkipReason       string   `json:"skip_reason"`       // reason for skipping
 }
 
+// loadSingleFileVersioned loads a single settings file from dir into a VersionedSettings struct.
+// Unlike LoadVersionedSettings, this does NOT merge defaults, global settings, or env vars.
+// It reads only the file at the given directory, which is needed for UpdateVersionedSetting
+// to avoid clobbering other layers.
+func LoadSingleFileVersioned(dir string) (*VersionedSettings, error) {
+	settingsPath := GetSettingsPath(dir)
+	if settingsPath == "" {
+		// No file exists yet — return empty versioned settings
+		return &VersionedSettings{SchemaVersion: "1"}, nil
+	}
+
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read %s: %w", settingsPath, err)
+	}
+
+	var vs VersionedSettings
+	ext := filepath.Ext(settingsPath)
+	if ext == ".json" {
+		if err := json.Unmarshal(data, &vs); err != nil {
+			return nil, fmt.Errorf("failed to parse JSON settings at %s: %w", settingsPath, err)
+		}
+	} else {
+		if err := yamlv3.Unmarshal(data, &vs); err != nil {
+			return nil, fmt.Errorf("failed to parse YAML settings at %s: %w", settingsPath, err)
+		}
+	}
+
+	// Ensure schema_version is set
+	if vs.SchemaVersion == "" {
+		vs.SchemaVersion = "1"
+	}
+
+	return &vs, nil
+}
+
+// UpdateVersionedSetting updates a specific setting key in a v1 versioned settings file.
+// It loads only the single file at dir (not merged settings), maps legacy key names to
+// their v1 equivalents, updates the appropriate field, and saves via SaveVersionedSettings.
+func UpdateVersionedSetting(dir string, key string, value string) error {
+	vs, err := LoadSingleFileVersioned(dir)
+	if err != nil {
+		return err
+	}
+
+	switch key {
+	// --- Direct mappings (same in both formats) ---
+	case "active_profile":
+		vs.ActiveProfile = value
+	case "default_template":
+		vs.DefaultTemplate = value
+	case "cli.autohelp":
+		if vs.CLI == nil {
+			vs.CLI = &V1CLIConfig{}
+		}
+		autohelp := value == "true"
+		vs.CLI.AutoHelp = &autohelp
+
+	// --- grove_id: top-level in legacy, hub.grove_id in v1 ---
+	case "grove_id":
+		if vs.Hub == nil {
+			vs.Hub = &V1HubClientConfig{}
+		}
+		vs.Hub.GroveID = value
+
+	// --- Hub client settings ---
+	case "hub.enabled":
+		if vs.Hub == nil {
+			vs.Hub = &V1HubClientConfig{}
+		}
+		enabled := value == "true"
+		vs.Hub.Enabled = &enabled
+	case "hub.endpoint":
+		if vs.Hub == nil {
+			vs.Hub = &V1HubClientConfig{}
+		}
+		vs.Hub.Endpoint = value
+	case "hub.groveId":
+		if vs.Hub == nil {
+			vs.Hub = &V1HubClientConfig{}
+		}
+		vs.Hub.GroveID = value
+	case "hub.local_only":
+		if vs.Hub == nil {
+			vs.Hub = &V1HubClientConfig{}
+		}
+		localOnly := value == "true"
+		vs.Hub.LocalOnly = &localOnly
+
+	// --- Broker identity: legacy hub.broker* → v1 server.broker.* ---
+	case "hub.brokerId":
+		if vs.Server == nil {
+			vs.Server = &V1ServerConfig{}
+		}
+		if vs.Server.Broker == nil {
+			vs.Server.Broker = &V1BrokerConfig{}
+		}
+		vs.Server.Broker.BrokerID = value
+	case "hub.brokerToken":
+		if vs.Server == nil {
+			vs.Server = &V1ServerConfig{}
+		}
+		if vs.Server.Broker == nil {
+			vs.Server.Broker = &V1BrokerConfig{}
+		}
+		vs.Server.Broker.BrokerToken = value
+	case "hub.brokerNickname":
+		if vs.Server == nil {
+			vs.Server = &V1ServerConfig{}
+		}
+		if vs.Server.Broker == nil {
+			vs.Server.Broker = &V1BrokerConfig{}
+		}
+		vs.Server.Broker.BrokerNickname = value
+
+	// --- Deprecated keys: skip silently in v1 ---
+	case "hub.token", "hub.apiKey", "hub.lastSyncedAt":
+		// These fields don't exist in v1 — skip without error
+		return nil
+
+	// --- Bucket: not present in v1 ---
+	case "bucket.provider", "bucket.name", "bucket.prefix":
+		// Bucket config is deprecated in v1 — skip without error
+		return nil
+
+	default:
+		return fmt.Errorf("unknown or complex setting key: %s (manual edit recommended for registries)", key)
+	}
+
+	return SaveVersionedSettings(dir, vs)
+}
+
 // SaveVersionedSettings writes a VersionedSettings struct as YAML to settings.yaml in dir.
 func SaveVersionedSettings(dir string, vs *VersionedSettings) error {
 	if err := os.MkdirAll(dir, 0755); err != nil {

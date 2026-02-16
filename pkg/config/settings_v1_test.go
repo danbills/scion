@@ -2390,6 +2390,332 @@ profiles:
 	assert.NotContains(t, string(newData), "auth_selectedType")
 }
 
+// --- UpdateSetting v1 format preservation tests ---
+
+func TestUpdateSetting_PreservesV1Format(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalHome := os.Getenv("HOME")
+	defer os.Setenv("HOME", originalHome)
+	os.Setenv("HOME", tmpDir)
+
+	groveDir := filepath.Join(tmpDir, "my-grove", ".scion")
+	require.NoError(t, os.MkdirAll(groveDir, 0755))
+
+	// Write a v1 versioned settings file
+	v1Content := `schema_version: "1"
+active_profile: local
+hub:
+  enabled: true
+  endpoint: https://hub.example.com
+  grove_id: original-grove-id
+`
+	require.NoError(t, os.WriteFile(filepath.Join(groveDir, "settings.yaml"), []byte(v1Content), 0644))
+
+	// Call UpdateSetting with a key that would clobber the format in the old code
+	err := UpdateSetting(groveDir, "grove_id", "new-grove-id", false)
+	require.NoError(t, err)
+
+	// Read back the file and verify it's still v1 format
+	data, err := os.ReadFile(filepath.Join(groveDir, "settings.yaml"))
+	require.NoError(t, err)
+
+	version, _ := DetectSettingsFormat(data)
+	assert.Equal(t, "1", version, "file should still be v1 format after UpdateSetting")
+
+	// Verify the field was updated
+	var vs VersionedSettings
+	require.NoError(t, yaml.Unmarshal(data, &vs))
+	assert.Equal(t, "new-grove-id", vs.Hub.GroveID)
+
+	// Verify other fields are preserved
+	assert.Equal(t, "local", vs.ActiveProfile)
+	require.NotNil(t, vs.Hub)
+	require.NotNil(t, vs.Hub.Enabled)
+	assert.True(t, *vs.Hub.Enabled)
+	assert.Equal(t, "https://hub.example.com", vs.Hub.Endpoint)
+}
+
+func TestUpdateSetting_V1HubEnabled(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalHome := os.Getenv("HOME")
+	defer os.Setenv("HOME", originalHome)
+	os.Setenv("HOME", tmpDir)
+
+	groveDir := filepath.Join(tmpDir, "my-grove", ".scion")
+	require.NoError(t, os.MkdirAll(groveDir, 0755))
+
+	v1Content := `schema_version: "1"
+active_profile: local
+`
+	require.NoError(t, os.WriteFile(filepath.Join(groveDir, "settings.yaml"), []byte(v1Content), 0644))
+
+	err := UpdateSetting(groveDir, "hub.enabled", "true", false)
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(filepath.Join(groveDir, "settings.yaml"))
+	require.NoError(t, err)
+
+	version, _ := DetectSettingsFormat(data)
+	assert.Equal(t, "1", version)
+
+	var vs VersionedSettings
+	require.NoError(t, yaml.Unmarshal(data, &vs))
+	require.NotNil(t, vs.Hub)
+	require.NotNil(t, vs.Hub.Enabled)
+	assert.True(t, *vs.Hub.Enabled)
+}
+
+func TestUpdateSetting_V1BrokerIdMapsToServerBroker(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalHome := os.Getenv("HOME")
+	defer os.Setenv("HOME", originalHome)
+	os.Setenv("HOME", tmpDir)
+
+	groveDir := filepath.Join(tmpDir, "my-grove", ".scion")
+	require.NoError(t, os.MkdirAll(groveDir, 0755))
+
+	v1Content := `schema_version: "1"
+active_profile: local
+hub:
+  endpoint: https://hub.example.com
+`
+	require.NoError(t, os.WriteFile(filepath.Join(groveDir, "settings.yaml"), []byte(v1Content), 0644))
+
+	// Update hub.brokerId — in v1 this maps to server.broker.broker_id
+	err := UpdateSetting(groveDir, "hub.brokerId", "broker-123", false)
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(filepath.Join(groveDir, "settings.yaml"))
+	require.NoError(t, err)
+
+	version, _ := DetectSettingsFormat(data)
+	assert.Equal(t, "1", version)
+
+	var vs VersionedSettings
+	require.NoError(t, yaml.Unmarshal(data, &vs))
+
+	// Should be in server.broker, not hub
+	require.NotNil(t, vs.Server)
+	require.NotNil(t, vs.Server.Broker)
+	assert.Equal(t, "broker-123", vs.Server.Broker.BrokerID)
+
+	// Hub should still be intact
+	require.NotNil(t, vs.Hub)
+	assert.Equal(t, "https://hub.example.com", vs.Hub.Endpoint)
+}
+
+func TestUpdateSetting_V1BrokerTokenMapsToServerBroker(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalHome := os.Getenv("HOME")
+	defer os.Setenv("HOME", originalHome)
+	os.Setenv("HOME", tmpDir)
+
+	groveDir := filepath.Join(tmpDir, "my-grove", ".scion")
+	require.NoError(t, os.MkdirAll(groveDir, 0755))
+
+	v1Content := `schema_version: "1"
+active_profile: local
+`
+	require.NoError(t, os.WriteFile(filepath.Join(groveDir, "settings.yaml"), []byte(v1Content), 0644))
+
+	err := UpdateSetting(groveDir, "hub.brokerToken", "token-xyz", false)
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(filepath.Join(groveDir, "settings.yaml"))
+	require.NoError(t, err)
+
+	var vs VersionedSettings
+	require.NoError(t, yaml.Unmarshal(data, &vs))
+
+	require.NotNil(t, vs.Server)
+	require.NotNil(t, vs.Server.Broker)
+	assert.Equal(t, "token-xyz", vs.Server.Broker.BrokerToken)
+}
+
+func TestUpdateSetting_V1DeprecatedKeysSkipSilently(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalHome := os.Getenv("HOME")
+	defer os.Setenv("HOME", originalHome)
+	os.Setenv("HOME", tmpDir)
+
+	groveDir := filepath.Join(tmpDir, "my-grove", ".scion")
+	require.NoError(t, os.MkdirAll(groveDir, 0755))
+
+	v1Content := `schema_version: "1"
+active_profile: local
+`
+	require.NoError(t, os.WriteFile(filepath.Join(groveDir, "settings.yaml"), []byte(v1Content), 0644))
+
+	// These keys are deprecated in v1 and should be silently skipped
+	for _, key := range []string{"hub.token", "hub.apiKey", "hub.lastSyncedAt"} {
+		err := UpdateSetting(groveDir, key, "some-value", false)
+		assert.NoError(t, err, "deprecated key %s should not error", key)
+	}
+
+	// File should be unchanged (besides schema_version being preserved)
+	data, err := os.ReadFile(filepath.Join(groveDir, "settings.yaml"))
+	require.NoError(t, err)
+
+	version, _ := DetectSettingsFormat(data)
+	assert.Equal(t, "1", version)
+}
+
+func TestUpdateSetting_V1MultipleUpdatesPreserveFormat(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalHome := os.Getenv("HOME")
+	defer os.Setenv("HOME", originalHome)
+	os.Setenv("HOME", tmpDir)
+
+	groveDir := filepath.Join(tmpDir, "my-grove", ".scion")
+	require.NoError(t, os.MkdirAll(groveDir, 0755))
+
+	v1Content := `schema_version: "1"
+active_profile: local
+default_template: gemini
+hub:
+  enabled: true
+  endpoint: https://hub.example.com
+  grove_id: grove-1
+`
+	require.NoError(t, os.WriteFile(filepath.Join(groveDir, "settings.yaml"), []byte(v1Content), 0644))
+
+	// Simulate what happens during hub operations: multiple sequential updates
+	require.NoError(t, UpdateSetting(groveDir, "grove_id", "new-grove-id", false))
+	require.NoError(t, UpdateSetting(groveDir, "hub.brokerId", "broker-abc", false))
+	require.NoError(t, UpdateSetting(groveDir, "hub.brokerToken", "token-xyz", false))
+	require.NoError(t, UpdateSetting(groveDir, "hub.enabled", "false", false))
+
+	// Read final state
+	data, err := os.ReadFile(filepath.Join(groveDir, "settings.yaml"))
+	require.NoError(t, err)
+
+	version, _ := DetectSettingsFormat(data)
+	assert.Equal(t, "1", version, "file should still be v1 after multiple updates")
+
+	var vs VersionedSettings
+	require.NoError(t, yaml.Unmarshal(data, &vs))
+
+	// Verify all updates took effect
+	assert.Equal(t, "new-grove-id", vs.Hub.GroveID)
+	require.NotNil(t, vs.Hub.Enabled)
+	assert.False(t, *vs.Hub.Enabled)
+	assert.Equal(t, "https://hub.example.com", vs.Hub.Endpoint) // preserved
+
+	require.NotNil(t, vs.Server)
+	require.NotNil(t, vs.Server.Broker)
+	assert.Equal(t, "broker-abc", vs.Server.Broker.BrokerID)
+	assert.Equal(t, "token-xyz", vs.Server.Broker.BrokerToken)
+
+	// Original fields should be preserved
+	assert.Equal(t, "local", vs.ActiveProfile)
+	assert.Equal(t, "gemini", vs.DefaultTemplate)
+}
+
+func TestUpdateSetting_LegacyFormatStillWorks(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalHome := os.Getenv("HOME")
+	defer os.Setenv("HOME", originalHome)
+	os.Setenv("HOME", tmpDir)
+
+	groveDir := filepath.Join(tmpDir, "my-grove", ".scion")
+	require.NoError(t, os.MkdirAll(groveDir, 0755))
+
+	// Write legacy format (no schema_version)
+	legacyContent := `active_profile: local
+hub:
+  endpoint: https://hub.example.com
+  brokerId: old-broker
+`
+	require.NoError(t, os.WriteFile(filepath.Join(groveDir, "settings.yaml"), []byte(legacyContent), 0644))
+
+	// UpdateSetting should use legacy path
+	err := UpdateSetting(groveDir, "grove_id", "my-grove-id", false)
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(filepath.Join(groveDir, "settings.yaml"))
+	require.NoError(t, err)
+
+	// Should remain legacy format (no schema_version)
+	version, _ := DetectSettingsFormat(data)
+	assert.Empty(t, version, "legacy file should remain legacy after UpdateSetting")
+
+	// Verify the update
+	assert.Contains(t, string(data), "grove_id: my-grove-id")
+}
+
+func TestLoadSingleFileVersioned_Basic(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	v1Content := `schema_version: "1"
+active_profile: local
+hub:
+  endpoint: https://hub.example.com
+  grove_id: test-grove
+`
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "settings.yaml"), []byte(v1Content), 0644))
+
+	vs, err := LoadSingleFileVersioned(tmpDir)
+	require.NoError(t, err)
+
+	assert.Equal(t, "1", vs.SchemaVersion)
+	assert.Equal(t, "local", vs.ActiveProfile)
+	require.NotNil(t, vs.Hub)
+	assert.Equal(t, "https://hub.example.com", vs.Hub.Endpoint)
+	assert.Equal(t, "test-grove", vs.Hub.GroveID)
+}
+
+func TestLoadSingleFileVersioned_NoFile(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	vs, err := LoadSingleFileVersioned(tmpDir)
+	require.NoError(t, err)
+
+	assert.Equal(t, "1", vs.SchemaVersion)
+	assert.Empty(t, vs.ActiveProfile)
+}
+
+func TestUpdateSetting_V1GlobalScope(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	originalHome := os.Getenv("HOME")
+	defer os.Setenv("HOME", originalHome)
+	os.Setenv("HOME", tmpDir)
+
+	globalDir := filepath.Join(tmpDir, ".scion")
+	require.NoError(t, os.MkdirAll(globalDir, 0755))
+
+	v1Content := `schema_version: "1"
+active_profile: local
+hub:
+  endpoint: https://hub.example.com
+`
+	require.NoError(t, os.WriteFile(filepath.Join(globalDir, "settings.yaml"), []byte(v1Content), 0644))
+
+	// Update global setting with v1 format
+	err := UpdateSetting(globalDir, "hub.brokerId", "global-broker-id", true)
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(filepath.Join(globalDir, "settings.yaml"))
+	require.NoError(t, err)
+
+	version, _ := DetectSettingsFormat(data)
+	assert.Equal(t, "1", version, "global v1 file should preserve format")
+
+	var vs VersionedSettings
+	require.NoError(t, yaml.Unmarshal(data, &vs))
+	require.NotNil(t, vs.Server)
+	require.NotNil(t, vs.Server.Broker)
+	assert.Equal(t, "global-broker-id", vs.Server.Broker.BrokerID)
+	assert.Equal(t, "https://hub.example.com", vs.Hub.Endpoint)
+}
+
 // --- Helper ---
 
 func boolPtr(b bool) *bool {

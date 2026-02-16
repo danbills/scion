@@ -1054,29 +1054,40 @@ func (s *SQLiteStore) ListGroves(ctx context.Context, filter store.GroveFilter, 
 	defer rows.Close()
 
 	var groves []store.Grove
-	for rows.Next() {
-		var grove store.Grove
-		var labels, annotations string
-		var gitRemote, defaultRuntimeBrokerID sql.NullString
+	type groveRow struct {
+		grove        store.Grove
+		labels       string
+		annotations  string
+		gitRemote    sql.NullString
+		brokerID     sql.NullString
+	}
+	var rowData []groveRow
 
+	for rows.Next() {
+		var r groveRow
 		if err := rows.Scan(
-			&grove.ID, &grove.Name, &grove.Slug, &gitRemote, &defaultRuntimeBrokerID,
-			&labels, &annotations,
-			&grove.Created, &grove.Updated, &grove.CreatedBy, &grove.OwnerID, &grove.Visibility,
+			&r.grove.ID, &r.grove.Name, &r.grove.Slug, &r.gitRemote, &r.brokerID,
+			&r.labels, &r.annotations,
+			&r.grove.Created, &r.grove.Updated, &r.grove.CreatedBy, &r.grove.OwnerID, &r.grove.Visibility,
 		); err != nil {
 			return nil, err
 		}
+		rowData = append(rowData, r)
+	}
+	rows.Close() // Close early to release connection for nested queries
 
-		if gitRemote.Valid {
-			grove.GitRemote = gitRemote.String
+	for _, r := range rowData {
+		grove := r.grove
+		if r.gitRemote.Valid {
+			grove.GitRemote = r.gitRemote.String
 		}
-		if defaultRuntimeBrokerID.Valid {
-			grove.DefaultRuntimeBrokerID = defaultRuntimeBrokerID.String
+		if r.brokerID.Valid {
+			grove.DefaultRuntimeBrokerID = r.brokerID.String
 		}
-		unmarshalJSON(labels, &grove.Labels)
-		unmarshalJSON(annotations, &grove.Annotations)
+		unmarshalJSON(r.labels, &grove.Labels)
+		unmarshalJSON(r.annotations, &grove.Annotations)
 
-		// Populate computed fields
+		// Populate computed fields - these now have a connection available
 		s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM agents WHERE grove_id = ?", grove.ID).Scan(&grove.AgentCount)
 		s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM grove_contributors WHERE grove_id = ? AND status = 'online'", grove.ID).Scan(&grove.ActiveBrokerCount)
 

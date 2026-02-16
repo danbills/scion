@@ -286,6 +286,15 @@ func TestGroveList(t *testing.T) {
 	s := setupTestStore(t)
 	ctx := context.Background()
 
+	// Create a broker for ActiveBrokerCount
+	broker := &store.RuntimeBroker{
+		ID:     api.NewUUID(),
+		Name:   "Test Broker",
+		Slug:   "test-broker",
+		Status: store.BrokerStatusOnline,
+	}
+	require.NoError(t, s.CreateRuntimeBroker(ctx, broker))
+
 	// Create groves
 	for i := 0; i < 3; i++ {
 		grove := &store.Grove{
@@ -298,6 +307,26 @@ func TestGroveList(t *testing.T) {
 			grove.Visibility = store.VisibilityPublic
 		}
 		require.NoError(t, s.CreateGrove(ctx, grove))
+
+		// Add an agent to the first grove
+		if i == 0 {
+			agent := &store.Agent{
+				ID:      api.NewUUID(),
+				Slug:    "test-agent",
+				Name:    "Test Agent",
+				GroveID: grove.ID,
+				Status:  store.AgentStatusRunning,
+			}
+			require.NoError(t, s.CreateAgent(ctx, agent))
+
+			// Link the broker to the first grove
+			require.NoError(t, s.AddGroveProvider(ctx, &store.GroveProvider{
+				GroveID:    grove.ID,
+				BrokerID:   broker.ID,
+				BrokerName: broker.Name,
+				Status:     store.BrokerStatusOnline,
+			}))
+		}
 	}
 
 	// List all
@@ -305,10 +334,22 @@ func TestGroveList(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 3, result.TotalCount)
 
+	// Verify computed fields on the first grove (index 2 due to DESC sort by created_at)
+	var firstGrove store.Grove
+	for _, g := range result.Items {
+		if g.Name == "Grove A" {
+			firstGrove = g
+			break
+		}
+	}
+	assert.Equal(t, 1, firstGrove.AgentCount)
+	assert.Equal(t, 1, firstGrove.ActiveBrokerCount)
+
 	// List by visibility
 	result, err = s.ListGroves(ctx, store.GroveFilter{Visibility: store.VisibilityPublic}, store.ListOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.TotalCount)
+	assert.Equal(t, "Grove A", result.Items[0].Name)
 }
 
 // ============================================================================

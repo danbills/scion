@@ -742,20 +742,22 @@ WARNING: Legacy settings format detected in /path/to/settings.yaml
 6. **Standardize `SCION_HUB_URL` → `SCION_HUB_ENDPOINT`**: Update `runtimebroker/handlers.go` to inject `SCION_HUB_ENDPOINT` instead of `SCION_HUB_URL`. Update `sciontool/hub/client.go` to read `SCION_HUB_ENDPOINT`. Support reading the legacy `SCION_HUB_URL` as fallback during transition.
 7. **Rename `HUB_API_URL` → `SCION_WEB_HUB_API_URL`**: Update `web/src/server/config.ts` to read `SCION_WEB_HUB_API_URL` (falling back to `HUB_API_URL` for backward compat). This aligns the web server env var with the `SCION_` prefix convention.
 
-### Phase 6: Migration Tooling & Cleanup
+### Phase 6: Migration Tooling & Documentation ✅ COMPLETE
 
-**Goal:** Provide automated migration and remove legacy code paths.
+**Goal:** Provide automated migration tooling and update documentation for the versioned settings format.
 
 **Deliverables:**
-1. Implement `scion config migrate` command:
-   - Reads legacy settings file.
-   - Produces versioned settings file.
-   - Backs up the original as `settings.yaml.bak`.
-   - Reports changes made.
-2. Implement `scion config migrate --server` to fold `server.yaml` into `settings.yaml`.
-3. Implement `scion config migrate --dry-run` for preview.
-4. Update documentation (`docs-site/`) with new settings reference.
-5. After a release cycle, remove the `LegacySettingsAdapter` and legacy loading path (Phase 2 code), making versioned settings the only supported format.
+1. Implement `scion config migrate` command for general settings migration:
+   - Reads legacy settings file, converts via `AdaptLegacySettings()`.
+   - Validates output against JSON Schema.
+   - Backs up the original with incremental naming (`.bak`, `.bak.1`, `.bak.2`).
+   - Migrates `hub.lastSyncedAt` to `state.yaml`.
+   - Reports changes made, including deprecation warnings.
+   - Supports `--dry-run`, `--global`, and JSON output.
+2. Implement `scion config migrate --server` to fold `server.yaml` into `settings.yaml` (completed in Phase 4).
+3. Add `SaveVersionedSettings()` and `MigrateSettingsFile()` to `pkg/config/settings_v1.go`.
+4. Update documentation (`docs-site/`) with new versioned settings reference.
+5. Legacy code path removal is deferred to a future release cycle.
 
 ### Phase 7: Unified Storage Consolidation
 

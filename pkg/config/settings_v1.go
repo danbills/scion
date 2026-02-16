@@ -15,8 +15,10 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -25,6 +27,7 @@ import (
 	"github.com/knadh/koanf/providers/rawbytes"
 	"github.com/knadh/koanf/v2"
 	"github.com/ptone/scion-agent/pkg/api"
+	yamlv3 "gopkg.in/yaml.v3"
 )
 
 // ResolveHarnessConfig looks up a named harness config and merges profile-level overrides.
@@ -1026,5 +1029,156 @@ func LoadEffectiveSettings(grovePath string) (*VersionedSettings, []string, erro
 	}
 	vs, warnings := AdaptLegacySettings(legacy)
 	return vs, warnings, nil
+}
+
+// MigrationResult reports what happened during a migration.
+type MigrationResult struct {
+	Path          string   `json:"path"`           // settings file that was migrated
+	BackupPath    string   `json:"backup_path"`    // path of backup file created
+	Format        string   `json:"format"`         // "legacy" or "versioned" (already up-to-date)
+	Warnings      []string `json:"warnings"`       // deprecation warnings from AdaptLegacySettings
+	StateMigrated bool     `json:"state_migrated"` // true if hub.lastSyncedAt was moved to state.yaml
+	WasJSON       bool     `json:"was_json"`       // true if source was .json format
+	Skipped       bool     `json:"skipped"`        // true if file was already versioned or missing
+	SkipReason    string   `json:"skip_reason"`    // reason for skipping
+}
+
+// SaveVersionedSettings writes a VersionedSettings struct as YAML to settings.yaml in dir.
+func SaveVersionedSettings(dir string, vs *VersionedSettings) error {
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create directory %s: %w", dir, err)
+	}
+
+	data, err := yamlv3.Marshal(vs)
+	if err != nil {
+		return fmt.Errorf("failed to marshal versioned settings: %w", err)
+	}
+
+	targetPath := filepath.Join(dir, "settings.yaml")
+	return os.WriteFile(targetPath, data, 0644)
+}
+
+// MigrateSettingsFile migrates a single legacy settings file in dir to versioned format.
+// If dryRun is true, no files are written.
+// Returns MigrationResult describing what was (or would be) done.
+func MigrateSettingsFile(dir string, dryRun bool) (*MigrationResult, error) {
+	result := &MigrationResult{}
+
+	// 1. Find settings file
+	settingsPath := GetSettingsPath(dir)
+	if settingsPath == "" {
+		result.Skipped = true
+		result.SkipReason = "no settings file found"
+		return result, nil
+	}
+	result.Path = settingsPath
+
+	// 2. Read and detect format
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read %s: %w", settingsPath, err)
+	}
+
+	version, isLegacy := DetectSettingsFormat(data)
+	if version != "" {
+		result.Skipped = true
+		result.SkipReason = fmt.Sprintf("already versioned (schema_version: %s)", version)
+		result.Format = "versioned"
+		return result, nil
+	}
+
+	result.Format = "legacy"
+	result.WasJSON = filepath.Ext(settingsPath) == ".json"
+
+	// 3. Parse legacy settings
+	var legacy Settings
+	if result.WasJSON {
+		if err := json.Unmarshal(data, &legacy); err != nil {
+			return nil, fmt.Errorf("failed to parse JSON settings: %w", err)
+		}
+	} else {
+		if err := yamlv3.Unmarshal(data, &legacy); err != nil {
+			return nil, fmt.Errorf("failed to parse YAML settings: %w", err)
+		}
+	}
+
+	// If file has no legacy indicators and is effectively empty, still migrate it
+	// (add schema_version to make it versioned)
+	if !isLegacy && version == "" {
+		// Minimal or empty file — still convert
+	}
+
+	// 4. Convert via AdaptLegacySettings
+	vs, warnings := AdaptLegacySettings(&legacy)
+	result.Warnings = warnings
+
+	// 5. Handle hub.lastSyncedAt: migrate to state.yaml
+	if legacy.Hub != nil && legacy.Hub.LastSyncedAt != "" {
+		result.StateMigrated = true
+		if !dryRun {
+			state, err := LoadGroveState(dir)
+			if err != nil {
+				return nil, fmt.Errorf("failed to load grove state: %w", err)
+			}
+			state.LastSyncedAt = legacy.Hub.LastSyncedAt
+			if err := SaveGroveState(dir, state); err != nil {
+				return nil, fmt.Errorf("failed to save grove state: %w", err)
+			}
+		}
+	}
+
+	// 6. Validate the output
+	outputData, err := yamlv3.Marshal(vs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal converted settings: %w", err)
+	}
+
+	validationErrors, err := ValidateSettings(outputData, "1")
+	if err != nil {
+		return nil, fmt.Errorf("validation error: %w", err)
+	}
+	if len(validationErrors) > 0 {
+		var errMsgs []string
+		for _, ve := range validationErrors {
+			errMsgs = append(errMsgs, ve.Error())
+		}
+		return nil, fmt.Errorf("migrated settings failed validation: %s", strings.Join(errMsgs, "; "))
+	}
+
+	// 7. If dryRun, return result without writing
+	if dryRun {
+		return result, nil
+	}
+
+	// 8. Back up the original file
+	backupPath := getBackupPath(settingsPath)
+	if err := os.Rename(settingsPath, backupPath); err != nil {
+		return nil, fmt.Errorf("failed to create backup %s: %w", backupPath, err)
+	}
+	result.BackupPath = backupPath
+
+	// 9. Write versioned settings
+	if err := SaveVersionedSettings(dir, vs); err != nil {
+		// Attempt to restore backup on failure
+		_ = os.Rename(backupPath, settingsPath)
+		return nil, fmt.Errorf("failed to write versioned settings: %w", err)
+	}
+
+	return result, nil
+}
+
+// getBackupPath returns a backup file path that does not already exist.
+// Uses <path>.bak, <path>.bak.1, <path>.bak.2, etc.
+func getBackupPath(path string) string {
+	backup := path + ".bak"
+	if _, err := os.Stat(backup); os.IsNotExist(err) {
+		return backup
+	}
+	for i := 1; ; i++ {
+		numbered := fmt.Sprintf("%s.bak.%d", path, i)
+		if _, err := os.Stat(numbered); os.IsNotExist(err) {
+			return numbered
+		}
+	}
 }
 

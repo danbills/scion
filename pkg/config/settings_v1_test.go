@@ -1630,6 +1630,358 @@ default_template: gemini
 	assert.Contains(t, content, "schema_version")
 }
 
+// --- Phase 6: Migration tests ---
+
+func TestSaveVersionedSettings(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	vs := &VersionedSettings{
+		SchemaVersion:   "1",
+		ActiveProfile:   "local",
+		DefaultTemplate: "gemini",
+		Hub: &V1HubClientConfig{
+			Enabled:  boolPtr(true),
+			Endpoint: "https://hub.example.com",
+		},
+		HarnessConfigs: map[string]HarnessConfigEntry{
+			"gemini": {
+				Harness: "gemini",
+				Image:   "example.com/gemini:latest",
+				User:    "scion",
+			},
+		},
+		Runtimes: map[string]V1RuntimeConfig{
+			"docker": {Type: "docker"},
+		},
+		Profiles: map[string]V1ProfileConfig{
+			"local": {Runtime: "docker"},
+		},
+	}
+
+	err := SaveVersionedSettings(tmpDir, vs)
+	require.NoError(t, err)
+
+	// Verify file exists
+	data, err := os.ReadFile(filepath.Join(tmpDir, "settings.yaml"))
+	require.NoError(t, err)
+
+	// Load it back
+	var loaded VersionedSettings
+	require.NoError(t, yaml.Unmarshal(data, &loaded))
+
+	assert.Equal(t, "1", loaded.SchemaVersion)
+	assert.Equal(t, "local", loaded.ActiveProfile)
+	assert.Equal(t, "gemini", loaded.DefaultTemplate)
+	assert.Equal(t, "https://hub.example.com", loaded.Hub.Endpoint)
+	assert.Equal(t, "gemini", loaded.HarnessConfigs["gemini"].Harness)
+	assert.Equal(t, "docker", loaded.Runtimes["docker"].Type)
+	assert.Equal(t, "docker", loaded.Profiles["local"].Runtime)
+}
+
+func TestMigrateSettingsFile_LegacyYAML(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	legacyContent := `
+active_profile: local
+default_template: gemini
+harnesses:
+  gemini:
+    image: example.com/gemini:latest
+    user: scion
+  claude:
+    image: example.com/claude:latest
+    user: scion
+runtimes:
+  docker:
+    host: tcp://localhost:2375
+profiles:
+  local:
+    runtime: docker
+hub:
+  endpoint: https://hub.example.com
+  groveId: test-grove
+`
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "settings.yaml"), []byte(legacyContent), 0644))
+
+	result, err := MigrateSettingsFile(tmpDir, false)
+	require.NoError(t, err)
+
+	assert.False(t, result.Skipped)
+	assert.Equal(t, "legacy", result.Format)
+	assert.False(t, result.WasJSON)
+	assert.NotEmpty(t, result.BackupPath)
+	assert.Contains(t, result.BackupPath, ".bak")
+
+	// Verify backup exists
+	_, err = os.Stat(result.BackupPath)
+	assert.NoError(t, err)
+
+	// Verify new file is versioned
+	newData, err := os.ReadFile(filepath.Join(tmpDir, "settings.yaml"))
+	require.NoError(t, err)
+
+	version, _ := DetectSettingsFormat(newData)
+	assert.Equal(t, "1", version)
+
+	// Verify harnesses warning is present
+	hasHarnessWarning := false
+	for _, w := range result.Warnings {
+		if strings.Contains(w, "harnesses is deprecated") {
+			hasHarnessWarning = true
+			break
+		}
+	}
+	assert.True(t, hasHarnessWarning)
+}
+
+func TestMigrateSettingsFile_LegacyJSON(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	legacyJSON := `{
+		"active_profile": "local",
+		"default_template": "gemini",
+		"harnesses": {
+			"gemini": {
+				"image": "example.com/gemini:latest",
+				"user": "scion"
+			}
+		},
+		"runtimes": {
+			"docker": {}
+		},
+		"profiles": {
+			"local": {
+				"runtime": "docker"
+			}
+		}
+	}`
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "settings.json"), []byte(legacyJSON), 0644))
+
+	result, err := MigrateSettingsFile(tmpDir, false)
+	require.NoError(t, err)
+
+	assert.False(t, result.Skipped)
+	assert.True(t, result.WasJSON)
+	assert.Contains(t, result.BackupPath, ".json.bak")
+
+	// Output should be .yaml
+	_, err = os.Stat(filepath.Join(tmpDir, "settings.yaml"))
+	assert.NoError(t, err)
+
+	// Verify it's versioned
+	newData, err := os.ReadFile(filepath.Join(tmpDir, "settings.yaml"))
+	require.NoError(t, err)
+	version, _ := DetectSettingsFormat(newData)
+	assert.Equal(t, "1", version)
+}
+
+func TestMigrateSettingsFile_AlreadyVersioned(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	versionedContent := `
+schema_version: "1"
+active_profile: local
+`
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "settings.yaml"), []byte(versionedContent), 0644))
+
+	result, err := MigrateSettingsFile(tmpDir, false)
+	require.NoError(t, err)
+
+	assert.True(t, result.Skipped)
+	assert.Equal(t, "versioned", result.Format)
+	assert.Contains(t, result.SkipReason, "already versioned")
+
+	// No backup should be created
+	assert.Empty(t, result.BackupPath)
+}
+
+func TestMigrateSettingsFile_NoFile(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	result, err := MigrateSettingsFile(tmpDir, false)
+	require.NoError(t, err)
+
+	assert.True(t, result.Skipped)
+	assert.Equal(t, "no settings file found", result.SkipReason)
+}
+
+func TestMigrateSettingsFile_DryRun(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	legacyContent := `
+active_profile: local
+harnesses:
+  gemini:
+    image: example.com/gemini:latest
+    user: scion
+runtimes:
+  docker: {}
+profiles:
+  local:
+    runtime: docker
+`
+	settingsPath := filepath.Join(tmpDir, "settings.yaml")
+	require.NoError(t, os.WriteFile(settingsPath, []byte(legacyContent), 0644))
+
+	result, err := MigrateSettingsFile(tmpDir, true)
+	require.NoError(t, err)
+
+	assert.False(t, result.Skipped)
+	assert.Equal(t, "legacy", result.Format)
+	assert.NotEmpty(t, result.Warnings)
+	assert.Empty(t, result.BackupPath) // dry run — no backup created
+
+	// Original file should be unchanged
+	data, err := os.ReadFile(settingsPath)
+	require.NoError(t, err)
+	version, _ := DetectSettingsFormat(data)
+	assert.Empty(t, version, "original file should still be legacy")
+}
+
+func TestMigrateSettingsFile_LastSyncedAt(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	legacyContent := `
+active_profile: local
+hub:
+  endpoint: https://hub.example.com
+  lastSyncedAt: "2024-06-15T10:30:00Z"
+runtimes:
+  docker: {}
+profiles:
+  local:
+    runtime: docker
+`
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "settings.yaml"), []byte(legacyContent), 0644))
+
+	result, err := MigrateSettingsFile(tmpDir, false)
+	require.NoError(t, err)
+
+	assert.True(t, result.StateMigrated)
+
+	// Verify state.yaml was created with the timestamp
+	state, err := LoadGroveState(tmpDir)
+	require.NoError(t, err)
+	assert.Equal(t, "2024-06-15T10:30:00Z", state.LastSyncedAt)
+}
+
+func TestMigrateSettingsFile_BackupExists(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	legacyContent := `
+active_profile: local
+harnesses:
+  gemini:
+    image: example.com/gemini:latest
+    user: scion
+runtimes:
+  docker: {}
+profiles:
+  local:
+    runtime: docker
+`
+	settingsPath := filepath.Join(tmpDir, "settings.yaml")
+
+	// Create existing .bak and .bak.1 files
+	require.NoError(t, os.WriteFile(settingsPath+".bak", []byte("old backup"), 0644))
+	require.NoError(t, os.WriteFile(settingsPath+".bak.1", []byte("old backup 1"), 0644))
+	require.NoError(t, os.WriteFile(settingsPath, []byte(legacyContent), 0644))
+
+	result, err := MigrateSettingsFile(tmpDir, false)
+	require.NoError(t, err)
+
+	assert.False(t, result.Skipped)
+	// Should use .bak.2 since .bak and .bak.1 exist
+	assert.Equal(t, settingsPath+".bak.2", result.BackupPath)
+	_, err = os.Stat(result.BackupPath)
+	assert.NoError(t, err)
+}
+
+func TestMigrateSettingsFile_ValidationPass(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	legacyContent := `
+active_profile: local
+default_template: gemini
+harnesses:
+  gemini:
+    image: example.com/gemini:latest
+    user: scion
+runtimes:
+  docker: {}
+profiles:
+  local:
+    runtime: docker
+`
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "settings.yaml"), []byte(legacyContent), 0644))
+
+	result, err := MigrateSettingsFile(tmpDir, false)
+	require.NoError(t, err)
+	assert.False(t, result.Skipped)
+
+	// Read the migrated file and validate against schema
+	data, err := os.ReadFile(filepath.Join(tmpDir, "settings.yaml"))
+	require.NoError(t, err)
+
+	valErrors, err := ValidateSettings(data, "1")
+	require.NoError(t, err)
+	assert.Empty(t, valErrors, "migrated file should validate against v1 schema: %v", valErrors)
+}
+
+func TestMigrateSettingsFile_DeprecationWarnings(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	legacyContent := `
+active_profile: local
+hub:
+  token: secret
+  apiKey: api-key
+  brokerId: broker-123
+  brokerNickname: my-broker
+  brokerToken: broker-token
+  lastSyncedAt: "2024-01-01T00:00:00Z"
+harnesses:
+  gemini:
+    image: example.com/gemini:latest
+    user: scion
+bucket:
+  provider: GCS
+  name: my-bucket
+runtimes:
+  docker: {}
+profiles:
+  local:
+    runtime: docker
+`
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "settings.yaml"), []byte(legacyContent), 0644))
+
+	result, err := MigrateSettingsFile(tmpDir, true)
+	require.NoError(t, err)
+
+	// Check all expected warnings are present
+	expectedWarnings := []string{
+		"hub.token",
+		"hub.apiKey",
+		"hub.brokerId",
+		"hub.brokerNickname",
+		"hub.brokerToken",
+		"hub.lastSyncedAt",
+		"harnesses is deprecated",
+		"bucket config is deprecated",
+	}
+
+	for _, expected := range expectedWarnings {
+		found := false
+		for _, w := range result.Warnings {
+			if strings.Contains(w, expected) {
+				found = true
+				break
+			}
+		}
+		assert.True(t, found, "expected warning containing %q", expected)
+	}
+}
+
 // --- Helper ---
 
 func boolPtr(b bool) *bool {

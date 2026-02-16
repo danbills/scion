@@ -309,6 +309,7 @@ against the schema — they use the pre-versioned format.`,
 var (
 	configMigrateServer bool
 	configMigrateDryRun bool
+	configMigrateGlobal bool
 )
 
 var configMigrateCmd = &cobra.Command{
@@ -316,76 +317,193 @@ var configMigrateCmd = &cobra.Command{
 	Short: "Migrate configuration to the versioned format",
 	Long: `Migrate configuration files to the versioned settings format.
 
+Without flags, migrates all legacy settings.yaml files (global and grove-level)
+to the versioned format with schema_version.
+
 Use --server to consolidate server.yaml into settings.yaml under the 'server' key.
 Use --dry-run to preview changes without writing files.
+Use --global to migrate only the global settings file.
 
 Examples:
-  # Preview server config migration
-  scion config migrate --server --dry-run
+  # Preview all settings migration
+  scion config migrate --dry-run
+
+  # Migrate all legacy settings files
+  scion config migrate
+
+  # Migrate only global settings
+  scion config migrate --global
 
   # Migrate server.yaml into settings.yaml
   scion config migrate --server`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if !configMigrateServer {
-			return fmt.Errorf("specify --server to migrate server configuration")
+		if configMigrateServer {
+			return runServerMigration()
 		}
+		return runSettingsMigration()
+	},
+}
 
-		globalDir, err := config.GetGlobalDir()
+// runServerMigration handles the --server migration path (server.yaml → settings.yaml).
+func runServerMigration() error {
+	globalDir, err := config.GetGlobalDir()
+	if err != nil {
+		return fmt.Errorf("failed to get global directory: %w", err)
+	}
+
+	// Load existing server.yaml
+	serverYAMLPath := config.GetServerConfigPath(globalDir)
+	if serverYAMLPath == "" {
+		return fmt.Errorf("no server.yaml found in %s — nothing to migrate", globalDir)
+	}
+
+	gc, err := config.LoadGlobalConfig(globalDir)
+	if err != nil {
+		return fmt.Errorf("failed to load server config: %w", err)
+	}
+
+	// Convert to V1ServerConfig
+	v1Server := config.ConvertGlobalToV1ServerConfig(gc)
+
+	if configMigrateDryRun {
+		fmt.Println("Dry run: would merge the following into settings.yaml under 'server' key:")
+		fmt.Println()
+		data, err := config.MarshalV1ServerConfig(v1Server)
 		if err != nil {
-			return fmt.Errorf("failed to get global directory: %w", err)
+			return fmt.Errorf("failed to marshal server config: %w", err)
 		}
-
-		// Load existing server.yaml
-		serverYAMLPath := config.GetServerConfigPath(globalDir)
-		if serverYAMLPath == "" {
-			return fmt.Errorf("no server.yaml found in %s — nothing to migrate", globalDir)
+		fmt.Printf("server:\n")
+		// Indent each line
+		for _, line := range splitLines(string(data)) {
+			if line != "" {
+				fmt.Printf("  %s\n", line)
+			} else {
+				fmt.Println()
+			}
 		}
+		fmt.Printf("\nSource: %s\n", serverYAMLPath)
+		fmt.Println("Run without --dry-run to apply.")
+		return nil
+	}
 
-		gc, err := config.LoadGlobalConfig(globalDir)
+	// Merge into settings.yaml
+	if err := config.MergeServerIntoSettings(globalDir, v1Server); err != nil {
+		return fmt.Errorf("failed to merge server config into settings.yaml: %w", err)
+	}
+
+	// Back up the original server.yaml
+	backupPath := serverYAMLPath + ".bak"
+	if err := os.Rename(serverYAMLPath, backupPath); err != nil {
+		fmt.Printf("Warning: failed to back up %s: %v\n", serverYAMLPath, err)
+	} else {
+		fmt.Printf("Backed up %s to %s\n", serverYAMLPath, backupPath)
+	}
+
+	fmt.Printf("Server config migrated into %s under 'server' key.\n", config.GetSettingsPath(globalDir))
+	return nil
+}
+
+// runSettingsMigration handles general settings migration (legacy → versioned).
+func runSettingsMigration() error {
+	type dirEntry struct {
+		dir   string
+		label string
+	}
+
+	var dirs []dirEntry
+
+	// Always include global dir
+	globalDir, err := config.GetGlobalDir()
+	if err != nil {
+		return fmt.Errorf("failed to get global directory: %w", err)
+	}
+	dirs = append(dirs, dirEntry{dir: globalDir, label: "global"})
+
+	// Include grove dir if applicable and --global was not specified
+	if !configMigrateGlobal {
+		projectDir, err := config.GetResolvedProjectDir(grovePath)
+		if err == nil && projectDir != "" && projectDir != globalDir {
+			dirs = append(dirs, dirEntry{dir: projectDir, label: "grove"})
+		}
+	}
+
+	var results []*config.MigrationResult
+	var labels []string
+	var migrationErr error
+
+	for _, d := range dirs {
+		result, err := config.MigrateSettingsFile(d.dir, configMigrateDryRun)
 		if err != nil {
-			return fmt.Errorf("failed to load server config: %w", err)
+			fmt.Fprintf(os.Stderr, "Error migrating %s settings (%s): %v\n", d.label, d.dir, err)
+			migrationErr = err
+			continue
 		}
+		results = append(results, result)
+		labels = append(labels, d.label)
+	}
 
-		// Convert to V1ServerConfig
-		v1Server := config.ConvertGlobalToV1ServerConfig(gc)
+	// Check if everything was skipped
+	allSkipped := true
+	for _, r := range results {
+		if !r.Skipped {
+			allSkipped = false
+			break
+		}
+	}
+
+	if isJSONOutput() {
+		type jsonResult struct {
+			Label  string                `json:"label"`
+			Result *config.MigrationResult `json:"result"`
+		}
+		var jsonResults []jsonResult
+		for i, r := range results {
+			jsonResults = append(jsonResults, jsonResult{Label: labels[i], Result: r})
+		}
+		return outputJSON(map[string]interface{}{
+			"results":          jsonResults,
+			"nothing_to_migrate": allSkipped && migrationErr == nil,
+		})
+	}
+
+	if allSkipped && migrationErr == nil {
+		fmt.Println("Nothing to migrate. All settings files are already versioned or absent.")
+		return nil
+	}
+
+	for i, r := range results {
+		label := labels[i]
+		if r.Skipped {
+			fmt.Printf("%s (%s): skipped — %s\n", label, r.Path, r.SkipReason)
+			continue
+		}
 
 		if configMigrateDryRun {
-			fmt.Println("Dry run: would merge the following into settings.yaml under 'server' key:")
-			fmt.Println()
-			data, err := config.MarshalV1ServerConfig(v1Server)
-			if err != nil {
-				return fmt.Errorf("failed to marshal server config: %w", err)
-			}
-			fmt.Printf("server:\n")
-			// Indent each line
-			for _, line := range splitLines(string(data)) {
-				if line != "" {
-					fmt.Printf("  %s\n", line)
-				} else {
-					fmt.Println()
-				}
-			}
-			fmt.Printf("\nSource: %s\n", serverYAMLPath)
-			fmt.Println("Run without --dry-run to apply.")
-			return nil
-		}
-
-		// Merge into settings.yaml
-		if err := config.MergeServerIntoSettings(globalDir, v1Server); err != nil {
-			return fmt.Errorf("failed to merge server config into settings.yaml: %w", err)
-		}
-
-		// Back up the original server.yaml
-		backupPath := serverYAMLPath + ".bak"
-		if err := os.Rename(serverYAMLPath, backupPath); err != nil {
-			fmt.Printf("Warning: failed to back up %s: %v\n", serverYAMLPath, err)
+			fmt.Printf("%s (%s): would migrate from %s format\n", label, r.Path, r.Format)
 		} else {
-			fmt.Printf("Backed up %s to %s\n", serverYAMLPath, backupPath)
+			fmt.Printf("%s: migrated %s\n", label, r.Path)
+			if r.BackupPath != "" {
+				fmt.Printf("  Backup: %s\n", r.BackupPath)
+			}
 		}
 
-		fmt.Printf("Server config migrated into %s under 'server' key.\n", config.GetSettingsPath(globalDir))
-		return nil
-	},
+		if r.StateMigrated {
+			if configMigrateDryRun {
+				fmt.Println("  Would migrate hub.lastSyncedAt to state.yaml")
+			} else {
+				fmt.Println("  Migrated hub.lastSyncedAt to state.yaml")
+			}
+		}
+
+		if len(r.Warnings) > 0 {
+			fmt.Println("  Deprecation warnings:")
+			for _, w := range r.Warnings {
+				fmt.Printf("    - %s\n", w)
+			}
+		}
+	}
+
+	return migrationErr
 }
 
 // splitLines splits a string into lines.
@@ -415,4 +533,5 @@ func init() {
 	configSetCmd.Flags().BoolVar(&configGlobal, "global", false, "Set configuration globally (~/.scion/settings.json)")
 	configMigrateCmd.Flags().BoolVar(&configMigrateServer, "server", false, "Migrate server.yaml into settings.yaml")
 	configMigrateCmd.Flags().BoolVar(&configMigrateDryRun, "dry-run", false, "Preview changes without writing files")
+	configMigrateCmd.Flags().BoolVar(&configMigrateGlobal, "global", false, "Migrate only the global settings file")
 }

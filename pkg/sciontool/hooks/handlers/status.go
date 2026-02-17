@@ -65,10 +65,17 @@ func (h *StatusHandler) Handle(event *hooks.Event) error {
 		return h.UpdateStatus(hooks.StateWaitingForInput, true)
 	}
 
-	// Clear WAITING_FOR_INPUT sessionStatus when agent activity is detected.
-	// Hook events from the agent generally indicate the user has responded
-	// (e.g., confirmed a tool permission prompt).
-	if isAgentActivityEvent(event.Name) {
+	// New work events (new prompt, new agent turn, new session) indicate the
+	// agent is starting fresh work. Clear any transient session status,
+	// including COMPLETED (the previous task is done, new one is starting).
+	if isNewWorkEvent(event.Name) {
+		return h.ClearSessionStatus()
+	}
+
+	// Tool-start events indicate the agent is actively working within the
+	// current task. Clear WAITING_FOR_INPUT (user has responded) but preserve
+	// COMPLETED (tools may fire after task_completed as part of wrap-up).
+	if event.Name == hooks.EventToolStart {
 		return h.ClearWaitingStatus()
 	}
 
@@ -128,6 +135,7 @@ func (h *StatusHandler) writeAgentInfoLocked(info *AgentInfo) error {
 
 // ClearWaitingStatus clears the sessionStatus if it is currently WAITING_FOR_INPUT.
 // This is a no-op if sessionStatus is any other value (e.g., COMPLETED).
+// Used for tool-start events where the agent is still working on the same task.
 func (h *StatusHandler) ClearWaitingStatus() error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -145,14 +153,33 @@ func (h *StatusHandler) ClearWaitingStatus() error {
 	return h.writeAgentInfoLocked(info)
 }
 
-// isAgentActivityEvent returns true for events that indicate the agent is
-// actively working, which means any prior WAITING_FOR_INPUT has been resolved.
-// Tool-end events are excluded because they fire immediately after tool execution
-// and may follow a "sciontool status ask_user" Bash call before the actual
-// question tool (AskUserQuestion) fires.
-func isAgentActivityEvent(name string) bool {
+// ClearSessionStatus clears the sessionStatus if it is a transient state
+// (WAITING_FOR_INPUT or COMPLETED). This is called when new work begins
+// (new prompt, new agent turn, new session) to reset the session status.
+func (h *StatusHandler) ClearSessionStatus() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	info := &AgentInfo{}
+	if data, err := os.ReadFile(h.StatusPath); err == nil {
+		_ = json.Unmarshal(data, info)
+	}
+
+	switch info.SessionStatus {
+	case string(hooks.StateWaitingForInput), string(hooks.StateCompleted):
+		info.SessionStatus = ""
+		return h.writeAgentInfoLocked(info)
+	default:
+		return nil // Nothing to clear
+	}
+}
+
+// isNewWorkEvent returns true for events that indicate new work is starting.
+// These events clear all transient session status (both WAITING_FOR_INPUT and
+// COMPLETED), since the agent is beginning a new task or turn.
+func isNewWorkEvent(name string) bool {
 	switch name {
-	case hooks.EventToolStart, hooks.EventPromptSubmit, hooks.EventAgentStart:
+	case hooks.EventPromptSubmit, hooks.EventAgentStart, hooks.EventSessionStart:
 		return true
 	}
 	return false

@@ -223,7 +223,7 @@ func TestStatusHandler_Handle_ClearsWaitingOnActivity(t *testing.T) {
 	}
 }
 
-func TestStatusHandler_Handle_DoesNotClearCompletedOnActivity(t *testing.T) {
+func TestStatusHandler_Handle_DoesNotClearCompletedOnToolStart(t *testing.T) {
 	tmpDir := t.TempDir()
 	statusPath := filepath.Join(tmpDir, "agent-info.json")
 	h := &StatusHandler{StatusPath: statusPath}
@@ -232,7 +232,7 @@ func TestStatusHandler_Handle_DoesNotClearCompletedOnActivity(t *testing.T) {
 	err := h.UpdateStatus(hooks.StateCompleted, true)
 	require.NoError(t, err)
 
-	// Handle a tool-start event
+	// Handle a tool-start event — tools may fire after task_completed as wrap-up
 	err = h.Handle(&hooks.Event{
 		Name: hooks.EventToolStart,
 		Data: hooks.EventData{ToolName: "Bash"},
@@ -240,7 +240,134 @@ func TestStatusHandler_Handle_DoesNotClearCompletedOnActivity(t *testing.T) {
 	require.NoError(t, err)
 
 	info := readAgentInfo(t, statusPath)
-	assert.Equal(t, "COMPLETED", info.SessionStatus, "COMPLETED should not be cleared")
+	assert.Equal(t, "COMPLETED", info.SessionStatus, "COMPLETED should not be cleared by tool-start")
+}
+
+func TestStatusHandler_Handle_DoesNotClearCompletedOnAgentEnd(t *testing.T) {
+	tmpDir := t.TempDir()
+	statusPath := filepath.Join(tmpDir, "agent-info.json")
+	h := &StatusHandler{StatusPath: statusPath}
+
+	// Pre-set sessionStatus to COMPLETED
+	err := h.UpdateStatus(hooks.StateCompleted, true)
+	require.NoError(t, err)
+
+	// Handle agent-end events (Stop/SubagentStop) — should not clear COMPLETED
+	err = h.Handle(&hooks.Event{Name: hooks.EventAgentEnd})
+	require.NoError(t, err)
+
+	info := readAgentInfo(t, statusPath)
+	assert.Equal(t, "COMPLETED", info.SessionStatus, "COMPLETED should not be cleared by agent-end")
+
+	// Second agent-end (e.g., SubagentStop)
+	err = h.Handle(&hooks.Event{Name: hooks.EventAgentEnd})
+	require.NoError(t, err)
+
+	info = readAgentInfo(t, statusPath)
+	assert.Equal(t, "COMPLETED", info.SessionStatus, "COMPLETED should survive multiple agent-end events")
+}
+
+func TestStatusHandler_Handle_DoesNotClearCompletedOnToolEnd(t *testing.T) {
+	tmpDir := t.TempDir()
+	statusPath := filepath.Join(tmpDir, "agent-info.json")
+	h := &StatusHandler{StatusPath: statusPath}
+
+	// Pre-set sessionStatus to COMPLETED
+	err := h.UpdateStatus(hooks.StateCompleted, true)
+	require.NoError(t, err)
+
+	// Handle tool-end event
+	err = h.Handle(&hooks.Event{Name: hooks.EventToolEnd})
+	require.NoError(t, err)
+
+	info := readAgentInfo(t, statusPath)
+	assert.Equal(t, "COMPLETED", info.SessionStatus, "COMPLETED should not be cleared by tool-end")
+}
+
+func TestStatusHandler_Handle_ClearsCompletedOnNewWork(t *testing.T) {
+	newWorkEvents := []struct {
+		name  string
+		event *hooks.Event
+	}{
+		{
+			name:  "PromptSubmit clears completed",
+			event: &hooks.Event{Name: hooks.EventPromptSubmit},
+		},
+		{
+			name:  "AgentStart clears completed",
+			event: &hooks.Event{Name: hooks.EventAgentStart},
+		},
+		{
+			name:  "SessionStart clears completed",
+			event: &hooks.Event{Name: hooks.EventSessionStart},
+		},
+	}
+
+	for _, tt := range newWorkEvents {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			statusPath := filepath.Join(tmpDir, "agent-info.json")
+			h := &StatusHandler{StatusPath: statusPath}
+
+			// Pre-set sessionStatus to COMPLETED
+			err := h.UpdateStatus(hooks.StateCompleted, true)
+			require.NoError(t, err)
+
+			// Handle the new-work event
+			err = h.Handle(tt.event)
+			require.NoError(t, err)
+
+			info := readAgentInfo(t, statusPath)
+			assert.Empty(t, info.SessionStatus, "COMPLETED should be cleared by new work event")
+		})
+	}
+}
+
+func TestStatusHandler_Handle_CompletedLifecycle(t *testing.T) {
+	// Simulate the full lifecycle: task completes, wrap-up tools fire,
+	// agent stops, then new prompt arrives.
+	tmpDir := t.TempDir()
+	statusPath := filepath.Join(tmpDir, "agent-info.json")
+	h := &StatusHandler{StatusPath: statusPath}
+
+	// 1. Agent completes task
+	err := h.UpdateStatus(hooks.StateCompleted, true)
+	require.NoError(t, err)
+	info := readAgentInfo(t, statusPath)
+	assert.Equal(t, "COMPLETED", info.SessionStatus)
+
+	// 2. Wrap-up tool fires (e.g., TaskUpdate)
+	err = h.Handle(&hooks.Event{
+		Name: hooks.EventToolStart,
+		Data: hooks.EventData{ToolName: "TaskUpdate"},
+	})
+	require.NoError(t, err)
+	info = readAgentInfo(t, statusPath)
+	assert.Equal(t, "COMPLETED", info.SessionStatus, "should survive tool-start")
+
+	// 3. Tool completes
+	err = h.Handle(&hooks.Event{Name: hooks.EventToolEnd})
+	require.NoError(t, err)
+	info = readAgentInfo(t, statusPath)
+	assert.Equal(t, "COMPLETED", info.SessionStatus, "should survive tool-end")
+
+	// 4. Agent turn ends (Stop event)
+	err = h.Handle(&hooks.Event{Name: hooks.EventAgentEnd})
+	require.NoError(t, err)
+	info = readAgentInfo(t, statusPath)
+	assert.Equal(t, "COMPLETED", info.SessionStatus, "should survive agent-end")
+
+	// 5. Another Stop event (SubagentStop)
+	err = h.Handle(&hooks.Event{Name: hooks.EventAgentEnd})
+	require.NoError(t, err)
+	info = readAgentInfo(t, statusPath)
+	assert.Equal(t, "COMPLETED", info.SessionStatus, "should survive second agent-end")
+
+	// 6. New prompt arrives — COMPLETED should now be cleared
+	err = h.Handle(&hooks.Event{Name: hooks.EventPromptSubmit})
+	require.NoError(t, err)
+	info = readAgentInfo(t, statusPath)
+	assert.Empty(t, info.SessionStatus, "should be cleared by new prompt")
 }
 
 func TestStatusHandler_Handle_ToolEndDoesNotClearWaiting(t *testing.T) {

@@ -250,41 +250,68 @@ func EnsureHubReady(grovePath string, opts EnsureHubReadyOptions) (*HubContext, 
 		// Get grove name for the prompt
 		groveName := getGroveName(resolvedPath, isGlobal)
 
-		// Check for existing groves with the same name
-		matches, err := findMatchingGroves(ctx, hubCtx, groveName)
-		if err != nil {
-			debugf("Warning: failed to search for matching groves: %v", err)
-			// Continue with registration - the hub will handle matching
-		}
+		// Check for an exact ID match on the Hub first.
+		// A grove with the same UUID is definitively the same grove,
+		// regardless of name differences (e.g., when running inside a
+		// container where the grove name resolves to "workspace").
+		idMatchGrove := findGroveByID(ctx, hubCtx)
 
-		if len(matches) > 0 {
-			// Found matching groves - ask user what to do
-			choice, selectedID := ShowMatchingGrovesPrompt(groveName, matches, opts.AutoConfirm)
-			switch choice {
-			case GroveChoiceCancel:
-				return nil, fmt.Errorf("registration cancelled")
-			case GroveChoiceLink:
-				// Update local grove_id to the selected grove
-				if err := config.UpdateSetting(resolvedPath, "grove_id", selectedID, isGlobal); err != nil {
-					return nil, fmt.Errorf("failed to update local grove_id: %w", err)
-				}
-				hubCtx.GroveID = selectedID
-				debugf("Updated local grove_id to: %s", selectedID)
-			case GroveChoiceRegisterNew:
-				// Generate a new grove ID to avoid linking to existing grove
-				newID := config.GenerateGroveIDForDir(filepath.Dir(resolvedPath))
-				if err := config.UpdateSetting(resolvedPath, "grove_id", newID, isGlobal); err != nil {
-					return nil, fmt.Errorf("failed to update local grove_id: %w", err)
-				}
-				hubCtx.GroveID = newID
-				debugf("Generated new grove_id: %s", newID)
-			}
+		if idMatchGrove != nil {
+			// Exact ID match found - this is the same grove, no prompt needed
+			debugf("Found grove with exact matching ID on Hub: %s (name: %s)", idMatchGrove.ID, idMatchGrove.Name)
+			fmt.Printf("Linked to existing grove: %s (ID: %s)\n", idMatchGrove.Name, idMatchGrove.ID)
 		} else {
-			// No matching groves - ask for confirmation
-			if !ShowLinkPrompt(groveName, opts.AutoConfirm) {
-				return nil, fmt.Errorf("grove must be linked to Hub to perform this operation\n\n" +
-					"Link this grove: scion hub link\n" +
-					"Or use local-only mode: scion --no-hub <command>")
+			// No ID match - fall back to name-based matching
+			matches, err := findMatchingGroves(ctx, hubCtx, groveName)
+			if err != nil {
+				debugf("Warning: failed to search for matching groves: %v", err)
+				// Continue with registration - the hub will handle matching
+			}
+
+			if len(matches) > 0 {
+				// Check if any name-based match has the same ID as our local grove.
+				// This is a defensive check for cases where the ID-based lookup
+				// above failed transiently but the list endpoint succeeded.
+				idMatched := false
+				for _, m := range matches {
+					if m.ID == hubCtx.GroveID {
+						debugf("Found exact ID match in name-based results: %s", m.ID)
+						fmt.Printf("Linked to existing grove: %s (ID: %s)\n", m.Name, m.ID)
+						idMatched = true
+						break
+					}
+				}
+
+				if !idMatched {
+					// No ID match - ask user what to do
+					choice, selectedID := ShowMatchingGrovesPrompt(groveName, matches, opts.AutoConfirm)
+					switch choice {
+					case GroveChoiceCancel:
+						return nil, fmt.Errorf("registration cancelled")
+					case GroveChoiceLink:
+						// Update local grove_id to the selected grove
+						if err := config.UpdateSetting(resolvedPath, "grove_id", selectedID, isGlobal); err != nil {
+							return nil, fmt.Errorf("failed to update local grove_id: %w", err)
+						}
+						hubCtx.GroveID = selectedID
+						debugf("Updated local grove_id to: %s", selectedID)
+					case GroveChoiceRegisterNew:
+						// Generate a new grove ID to avoid linking to existing grove
+						newID := config.GenerateGroveIDForDir(filepath.Dir(resolvedPath))
+						if err := config.UpdateSetting(resolvedPath, "grove_id", newID, isGlobal); err != nil {
+							return nil, fmt.Errorf("failed to update local grove_id: %w", err)
+						}
+						hubCtx.GroveID = newID
+						debugf("Generated new grove_id: %s", newID)
+					}
+				}
+			} else {
+				// No matching groves - ask for confirmation
+				if !ShowLinkPrompt(groveName, opts.AutoConfirm) {
+					return nil, fmt.Errorf("grove must be linked to Hub to perform this operation\n\n" +
+						"Link this grove: scion hub link\n" +
+						"Or use local-only mode: scion --no-hub <command>")
+				}
 			}
 		}
 
@@ -733,15 +760,29 @@ func isGroveRegistered(ctx context.Context, hubCtx *HubContext) (bool, error) {
 	// Try to get the grove by ID
 	_, err := hubCtx.Client.Groves().Get(ctxTimeout, hubCtx.GroveID)
 	if err != nil {
-		// Check if it's a "not found" error
-		errStr := err.Error()
-		if containsIgnoreCase(errStr, "404") || containsIgnoreCase(errStr, "not found") {
+		if apiclient.IsNotFoundError(err) {
 			return false, nil
 		}
 		return false, fmt.Errorf("failed to check grove registration: %w", err)
 	}
 
 	return true, nil
+}
+
+// findGroveByID attempts to find a grove on the Hub with the exact same ID
+// as the local grove. This check runs before name-based matching to handle
+// cases where the grove name differs (e.g., "workspace" inside a container)
+// but the grove_id is the same. Returns nil if no match is found.
+func findGroveByID(ctx context.Context, hubCtx *HubContext) *hubclient.Grove {
+	ctxTimeout, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	grove, err := hubCtx.Client.Groves().Get(ctxTimeout, hubCtx.GroveID)
+	if err != nil {
+		debugf("findGroveByID: no grove found with ID %s: %v", hubCtx.GroveID, err)
+		return nil
+	}
+	return grove
 }
 
 // findMatchingGroves finds groves with the same name on the Hub.

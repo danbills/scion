@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/ptone/scion-agent/pkg/config"
+	"github.com/ptone/scion-agent/pkg/hubclient"
 )
 
 func TestSyncResult_IsInSync(t *testing.T) {
@@ -856,6 +857,151 @@ func TestCreateHubClient_FallsBackToDevAuth(t *testing.T) {
 	if client == nil {
 		t.Fatal("expected non-nil client")
 	}
+}
+
+func TestIsGroveRegistered_Found(t *testing.T) {
+	groveID := "test-grove-uuid-1234"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/groves/"+groveID {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"id": groveID, "name": "my-grove"})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	client, err := createTestHubClient(server.URL)
+	if err != nil {
+		t.Fatalf("createTestHubClient failed: %v", err)
+	}
+
+	hubCtx := &HubContext{Client: client, GroveID: groveID}
+	registered, err := isGroveRegistered(context.Background(), hubCtx)
+	if err != nil {
+		t.Fatalf("isGroveRegistered returned error: %v", err)
+	}
+	if !registered {
+		t.Error("expected grove to be registered")
+	}
+}
+
+func TestIsGroveRegistered_NotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": map[string]string{
+				"code":    "not_found",
+				"message": "Grove not found",
+			},
+		})
+	}))
+	defer server.Close()
+
+	client, err := createTestHubClient(server.URL)
+	if err != nil {
+		t.Fatalf("createTestHubClient failed: %v", err)
+	}
+
+	hubCtx := &HubContext{Client: client, GroveID: "nonexistent-id"}
+	registered, err := isGroveRegistered(context.Background(), hubCtx)
+	if err != nil {
+		t.Fatalf("isGroveRegistered should not return error for 404, got: %v", err)
+	}
+	if registered {
+		t.Error("expected grove to NOT be registered")
+	}
+}
+
+func TestIsGroveRegistered_NonNotFoundError(t *testing.T) {
+	// A 500 error whose body happens to contain "not found" text should NOT
+	// be treated as a 404. This tests the fix from string-based to type-based
+	// error checking.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": map[string]string{
+				"code":    "internal_error",
+				"message": "database connection not found",
+			},
+		})
+	}))
+	defer server.Close()
+
+	client, err := createTestHubClient(server.URL)
+	if err != nil {
+		t.Fatalf("createTestHubClient failed: %v", err)
+	}
+
+	hubCtx := &HubContext{Client: client, GroveID: "some-id"}
+	_, err = isGroveRegistered(context.Background(), hubCtx)
+	if err == nil {
+		t.Fatal("expected error for 500 response, got nil")
+	}
+}
+
+func TestFindGroveByID_Found(t *testing.T) {
+	groveID := "exact-match-uuid-5678"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/groves/"+groveID {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{
+				"id":   groveID,
+				"name": "original-project-name",
+			})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": map[string]string{"code": "not_found", "message": "not found"},
+		})
+	}))
+	defer server.Close()
+
+	client, err := createTestHubClient(server.URL)
+	if err != nil {
+		t.Fatalf("createTestHubClient failed: %v", err)
+	}
+
+	hubCtx := &HubContext{Client: client, GroveID: groveID}
+	grove := findGroveByID(context.Background(), hubCtx)
+	if grove == nil {
+		t.Fatal("expected to find grove by ID, got nil")
+	}
+	if grove.ID != groveID {
+		t.Errorf("expected grove ID %s, got %s", groveID, grove.ID)
+	}
+	if grove.Name != "original-project-name" {
+		t.Errorf("expected grove name 'original-project-name', got %s", grove.Name)
+	}
+}
+
+func TestFindGroveByID_NotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": map[string]string{"code": "not_found", "message": "not found"},
+		})
+	}))
+	defer server.Close()
+
+	client, err := createTestHubClient(server.URL)
+	if err != nil {
+		t.Fatalf("createTestHubClient failed: %v", err)
+	}
+
+	hubCtx := &HubContext{Client: client, GroveID: "nonexistent-uuid"}
+	grove := findGroveByID(context.Background(), hubCtx)
+	if grove != nil {
+		t.Errorf("expected nil for non-existent grove, got %+v", grove)
+	}
+}
+
+func createTestHubClient(baseURL string) (hubclient.Client, error) {
+	return hubclient.New(baseURL)
 }
 
 func TestRFC3339Nano_BackwardCompatible(t *testing.T) {

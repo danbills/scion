@@ -124,7 +124,7 @@ func TestClaudeInjectAgentInstructions(t *testing.T) {
 		t.Fatalf("InjectAgentInstructions failed: %v", err)
 	}
 
-	target := filepath.Join(agentHome, ".claude", "claude.md")
+	target := filepath.Join(agentHome, ".claude", "CLAUDE.md")
 	data, err := os.ReadFile(target)
 	if err != nil {
 		t.Fatalf("expected file at %s: %v", target, err)
@@ -143,12 +143,13 @@ func TestClaudeInjectSystemPrompt(t *testing.T) {
 		t.Fatalf("InjectSystemPrompt failed: %v", err)
 	}
 
+	// System prompt is unsupported for Claude; no file should be written.
 	target := filepath.Join(agentHome, ".claude", "CLAUDE.md")
-	data, err := os.ReadFile(target)
-	if err != nil {
-		t.Fatalf("expected file at %s: %v", target, err)
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Errorf("expected no file at %s, but it exists", target)
 	}
-	if string(data) != string(content) {
-		t.Errorf("content mismatch: got %q, want %q", string(data), string(content))
+	target = filepath.Join(agentHome, ".claude", "claude.md")
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Errorf("expected no file at %s, but it exists", target)
 	}
 }

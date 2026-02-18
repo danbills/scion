@@ -74,7 +74,7 @@ func (c *ClaudeCode) DefaultConfigDir() string {
 }
 
 func (c *ClaudeCode) HasSystemPrompt(agentHome string) bool {
-	return true
+	return false
 }
 
 func (c *ClaudeCode) Provision(ctx context.Context, agentName, agentHome, agentWorkspace string) error {
@@ -155,7 +155,7 @@ func (c *ClaudeCode) GetHarnessEmbedsFS() (embed.FS, string) {
 }
 
 func (c *ClaudeCode) InjectAgentInstructions(agentHome string, content []byte) error {
-	target := filepath.Join(agentHome, ".claude", "claude.md")
+	target := filepath.Join(agentHome, ".claude", "CLAUDE.md")
 	if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 		return fmt.Errorf("failed to create directory for agent instructions: %w", err)
 	}
@@ -163,9 +163,6 @@ func (c *ClaudeCode) InjectAgentInstructions(agentHome string, content []byte) e
 }
 
 func (c *ClaudeCode) InjectSystemPrompt(agentHome string, content []byte) error {
-	target := filepath.Join(agentHome, ".claude", "CLAUDE.md")
-	if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
-		return fmt.Errorf("failed to create directory for system prompt: %w", err)
-	}
-	return os.WriteFile(target, content, 0644)
+	// System prompt is not yet supported for the Claude harness.
+	return nil
 }

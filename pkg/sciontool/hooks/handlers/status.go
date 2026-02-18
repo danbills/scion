@@ -24,12 +24,6 @@ type StatusHandler struct {
 	mu sync.Mutex
 }
 
-// AgentInfo represents the agent status JSON structure.
-type AgentInfo struct {
-	Status        string `json:"status,omitempty"`
-	SessionStatus string `json:"sessionStatus,omitempty"`
-}
-
 // NewStatusHandler creates a new status handler.
 func NewStatusHandler() *StatusHandler {
 	home := os.Getenv("HOME")
@@ -87,25 +81,40 @@ func (h *StatusHandler) UpdateStatus(status hooks.AgentState, sessionStatus bool
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	// Read existing data
-	info := &AgentInfo{}
-	if data, err := os.ReadFile(h.StatusPath); err == nil {
-		_ = json.Unmarshal(data, info)
-	}
+	// Read existing data preserving all fields
+	info := h.readAgentInfoMap()
 
 	// Update the appropriate field
 	if sessionStatus {
-		info.SessionStatus = string(status)
+		if status == "" {
+			delete(info, "sessionStatus")
+		} else {
+			info["sessionStatus"] = string(status)
+		}
 	} else {
-		info.Status = string(status)
+		if status == "" {
+			delete(info, "status")
+		} else {
+			info["status"] = string(status)
+		}
 	}
 
 	return h.writeAgentInfoLocked(info)
 }
 
-// writeAgentInfoLocked writes the AgentInfo to disk atomically.
+// readAgentInfoMap reads agent-info.json into a generic map, preserving all fields.
 // Caller must hold h.mu.
-func (h *StatusHandler) writeAgentInfoLocked(info *AgentInfo) error {
+func (h *StatusHandler) readAgentInfoMap() map[string]interface{} {
+	info := make(map[string]interface{})
+	if data, err := os.ReadFile(h.StatusPath); err == nil {
+		_ = json.Unmarshal(data, &info)
+	}
+	return info
+}
+
+// writeAgentInfoLocked writes the agent info map to disk atomically.
+// Caller must hold h.mu.
+func (h *StatusHandler) writeAgentInfoLocked(info map[string]interface{}) error {
 	data, err := json.MarshalIndent(info, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshaling status: %w", err)
@@ -140,16 +149,14 @@ func (h *StatusHandler) ClearWaitingStatus() error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	info := &AgentInfo{}
-	if data, err := os.ReadFile(h.StatusPath); err == nil {
-		_ = json.Unmarshal(data, info)
-	}
+	info := h.readAgentInfoMap()
 
-	if info.SessionStatus != string(hooks.StateWaitingForInput) {
+	ss, _ := info["sessionStatus"].(string)
+	if ss != string(hooks.StateWaitingForInput) {
 		return nil // Not waiting, nothing to clear
 	}
 
-	info.SessionStatus = ""
+	delete(info, "sessionStatus")
 	return h.writeAgentInfoLocked(info)
 }
 
@@ -160,14 +167,12 @@ func (h *StatusHandler) ClearSessionStatus() error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	info := &AgentInfo{}
-	if data, err := os.ReadFile(h.StatusPath); err == nil {
-		_ = json.Unmarshal(data, info)
-	}
+	info := h.readAgentInfoMap()
 
-	switch info.SessionStatus {
+	ss, _ := info["sessionStatus"].(string)
+	switch ss {
 	case string(hooks.StateWaitingForInput), string(hooks.StateCompleted):
-		info.SessionStatus = ""
+		delete(info, "sessionStatus")
 		return h.writeAgentInfoLocked(info)
 	default:
 		return nil // Nothing to clear

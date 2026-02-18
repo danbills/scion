@@ -29,12 +29,7 @@ func TestStatusHandler_UpdateStatus(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify file contents
-	data, err := os.ReadFile(statusPath)
-	require.NoError(t, err)
-
-	var info AgentInfo
-	err = json.Unmarshal(data, &info)
-	require.NoError(t, err)
+	info := readAgentInfo(t, statusPath)
 	assert.Equal(t, "THINKING", info.Status)
 	assert.Empty(t, info.SessionStatus)
 
@@ -42,10 +37,7 @@ func TestStatusHandler_UpdateStatus(t *testing.T) {
 	err = h.UpdateStatus(hooks.StateWaitingForInput, true)
 	require.NoError(t, err)
 
-	data, err = os.ReadFile(statusPath)
-	require.NoError(t, err)
-	err = json.Unmarshal(data, &info)
-	require.NoError(t, err)
+	info = readAgentInfo(t, statusPath)
 	assert.Equal(t, "THINKING", info.Status) // Previous status preserved
 	assert.Equal(t, "WAITING_FOR_INPUT", info.SessionStatus)
 }
@@ -115,12 +107,7 @@ func TestStatusHandler_Handle(t *testing.T) {
 			err := h.Handle(tt.event)
 			require.NoError(t, err)
 
-			data, err := os.ReadFile(statusPath)
-			require.NoError(t, err)
-
-			var info AgentInfo
-			err = json.Unmarshal(data, &info)
-			require.NoError(t, err)
+			info := readAgentInfo(t, statusPath)
 			assert.Equal(t, string(tt.wantStatus), info.Status)
 		})
 	}
@@ -478,13 +465,84 @@ func TestStatusHandler_Handle_ClaudeExitPlanModeThenActivity(t *testing.T) {
 	assert.Empty(t, info.SessionStatus, "activity after plan approval should clear WAITING_FOR_INPUT")
 }
 
+func TestStatusHandler_PreservesExtraFields(t *testing.T) {
+	tmpDir := t.TempDir()
+	statusPath := filepath.Join(tmpDir, "agent-info.json")
+
+	// Seed agent-info.json with extra fields (as written at provisioning time)
+	initial := map[string]interface{}{
+		"status":        "running",
+		"template":      "my-template",
+		"harnessConfig": "claude",
+		"runtime":       "docker",
+		"grove":         "my-grove",
+		"profile":       "default",
+		"name":          "agent-1",
+	}
+	data, err := json.Marshal(initial)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(statusPath, data, 0644))
+
+	h := &StatusHandler{StatusPath: statusPath}
+
+	// Update status — this should NOT destroy the extra fields
+	err = h.UpdateStatus(hooks.StateThinking, false)
+	require.NoError(t, err)
+
+	result := readAgentInfoMap(t, statusPath)
+	assert.Equal(t, "THINKING", result["status"])
+	assert.Equal(t, "my-template", result["template"], "template field should be preserved")
+	assert.Equal(t, "claude", result["harnessConfig"], "harnessConfig field should be preserved")
+	assert.Equal(t, "docker", result["runtime"], "runtime field should be preserved")
+	assert.Equal(t, "my-grove", result["grove"], "grove field should be preserved")
+	assert.Equal(t, "default", result["profile"], "profile field should be preserved")
+	assert.Equal(t, "agent-1", result["name"], "name field should be preserved")
+
+	// Update session status — extra fields should still be there
+	err = h.UpdateStatus(hooks.StateWaitingForInput, true)
+	require.NoError(t, err)
+
+	result = readAgentInfoMap(t, statusPath)
+	assert.Equal(t, "THINKING", result["status"])
+	assert.Equal(t, "WAITING_FOR_INPUT", result["sessionStatus"])
+	assert.Equal(t, "my-template", result["template"], "template field should survive session status update")
+	assert.Equal(t, "claude", result["harnessConfig"], "harnessConfig field should survive session status update")
+
+	// Clear session status — extra fields should still be there
+	err = h.ClearSessionStatus()
+	require.NoError(t, err)
+
+	result = readAgentInfoMap(t, statusPath)
+	assert.Nil(t, result["sessionStatus"], "sessionStatus should be cleared")
+	assert.Equal(t, "my-template", result["template"], "template field should survive clear")
+	assert.Equal(t, "claude", result["harnessConfig"], "harnessConfig field should survive clear")
+}
+
+// agentInfoFields is a test-only struct for reading status fields from agent-info.json.
+type agentInfoFields struct {
+	Status        string `json:"status,omitempty"`
+	SessionStatus string `json:"sessionStatus,omitempty"`
+}
+
 // readAgentInfo is a test helper that reads and parses agent-info.json.
-func readAgentInfo(t *testing.T, path string) AgentInfo {
+func readAgentInfo(t *testing.T, path string) agentInfoFields {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
 
-	var info AgentInfo
+	var info agentInfoFields
+	err = json.Unmarshal(data, &info)
+	require.NoError(t, err)
+	return info
+}
+
+// readAgentInfoMap is a test helper that reads agent-info.json as a raw map.
+func readAgentInfoMap(t *testing.T, path string) map[string]interface{} {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	var info map[string]interface{}
 	err = json.Unmarshal(data, &info)
 	require.NoError(t, err)
 	return info

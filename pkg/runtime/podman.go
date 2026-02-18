@@ -243,10 +243,11 @@ func (r *PodmanRuntime) List(ctx context.Context, labelFilter map[string]string)
 				Image:           c.Image,
 				Labels:          labels,
 				Annotations:     labels,
-				Template:        labels["scion.template"],
-				Grove:           labels["scion.grove"],
-				GrovePath:       labels["scion.grove_path"],
-				Runtime:         r.Name(),
+				Template:      labels["scion.template"],
+				HarnessConfig: labels["scion.harness_config"],
+				Grove:         labels["scion.grove"],
+				GrovePath:     labels["scion.grove_path"],
+				Runtime:       r.Name(),
 			})
 		}
 	}

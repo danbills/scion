@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/ptone/scion-agent/pkg/api"
 	"github.com/ptone/scion-agent/pkg/util"
@@ -73,7 +74,7 @@ func (t *Template) LoadConfig() (*api.ScionConfig, error) {
 	var cfg api.ScionConfig
 	ext := filepath.Ext(configPath)
 	if ext == ".yaml" || ext == ".yml" {
-		if err := yaml.Unmarshal(data, &cfg); err != nil {
+		if err := unmarshalYAMLNormalized(data, &cfg); err != nil {
 			return nil, fmt.Errorf("failed to parse YAML config %s: %w", configPath, err)
 		}
 	} else {
@@ -91,6 +92,39 @@ func (t *Template) LoadConfig() (*api.ScionConfig, error) {
 	}
 
 	return &cfg, nil
+}
+
+// unmarshalYAMLNormalized parses YAML into a ScionConfig, normalizing
+// top-level hyphenated keys to underscored keys. This allows template
+// authors to use either `harness-config` or `harness_config` style keys.
+func unmarshalYAMLNormalized(data []byte, cfg *api.ScionConfig) error {
+	var node yaml.Node
+	if err := yaml.Unmarshal(data, &node); err != nil {
+		return err
+	}
+	normalizeYAMLMappingKeys(&node)
+	return node.Decode(cfg)
+}
+
+// normalizeYAMLMappingKeys replaces hyphens with underscores in the
+// top-level mapping keys of a YAML document node. Only the first level
+// of mapping keys is normalized to avoid altering map values such as
+// env variable names.
+func normalizeYAMLMappingKeys(node *yaml.Node) {
+	if node.Kind == yaml.DocumentNode {
+		for _, child := range node.Content {
+			normalizeYAMLMappingKeys(child)
+		}
+		return
+	}
+	if node.Kind == yaml.MappingNode {
+		for i := 0; i < len(node.Content); i += 2 {
+			key := node.Content[i]
+			if key.Kind == yaml.ScalarNode {
+				key.Value = strings.ReplaceAll(key.Value, "-", "_")
+			}
+		}
+	}
 }
 
 func LoadProjectKubernetesConfig() (*api.KubernetesConfig, error) {

@@ -983,6 +983,199 @@ func TestMergeScionConfigTelemetry(t *testing.T) {
 	})
 }
 
+func TestLoadConfigYAMLKeyNormalization(t *testing.T) {
+	t.Run("harness-config hyphen maps to harness_config", func(t *testing.T) {
+		tmpDir, err := os.MkdirTemp("", "scion-test-yaml-normalize-*")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.RemoveAll(tmpDir)
+
+		configContent := `harness-config: claude-web
+`
+		if err := os.WriteFile(filepath.Join(tmpDir, "scion-agent.yaml"), []byte(configContent), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		tpl := &Template{Path: tmpDir}
+		cfg, err := tpl.LoadConfig()
+		if err != nil {
+			t.Fatalf("LoadConfig failed: %v", err)
+		}
+
+		if cfg.HarnessConfig != "claude-web" {
+			t.Errorf("expected HarnessConfig='claude-web', got %q", cfg.HarnessConfig)
+		}
+	})
+
+	t.Run("default-harness-config hyphen maps to default_harness_config", func(t *testing.T) {
+		tmpDir, err := os.MkdirTemp("", "scion-test-yaml-normalize-*")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.RemoveAll(tmpDir)
+
+		configContent := `default-harness-config: gemini-experimental
+`
+		if err := os.WriteFile(filepath.Join(tmpDir, "scion-agent.yaml"), []byte(configContent), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		tpl := &Template{Path: tmpDir}
+		cfg, err := tpl.LoadConfig()
+		if err != nil {
+			t.Fatalf("LoadConfig failed: %v", err)
+		}
+
+		if cfg.DefaultHarnessConfig != "gemini-experimental" {
+			t.Errorf("expected DefaultHarnessConfig='gemini-experimental', got %q", cfg.DefaultHarnessConfig)
+		}
+	})
+
+	t.Run("underscore keys still work", func(t *testing.T) {
+		tmpDir, err := os.MkdirTemp("", "scion-test-yaml-normalize-*")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.RemoveAll(tmpDir)
+
+		configContent := `harness_config: claude-web
+default_harness_config: gemini
+command_args:
+  - "--verbose"
+`
+		if err := os.WriteFile(filepath.Join(tmpDir, "scion-agent.yaml"), []byte(configContent), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		tpl := &Template{Path: tmpDir}
+		cfg, err := tpl.LoadConfig()
+		if err != nil {
+			t.Fatalf("LoadConfig failed: %v", err)
+		}
+
+		if cfg.HarnessConfig != "claude-web" {
+			t.Errorf("expected HarnessConfig='claude-web', got %q", cfg.HarnessConfig)
+		}
+		if cfg.DefaultHarnessConfig != "gemini" {
+			t.Errorf("expected DefaultHarnessConfig='gemini', got %q", cfg.DefaultHarnessConfig)
+		}
+		if len(cfg.CommandArgs) != 1 || cfg.CommandArgs[0] != "--verbose" {
+			t.Errorf("expected CommandArgs=['--verbose'], got %v", cfg.CommandArgs)
+		}
+	})
+
+	t.Run("env map keys are not normalized", func(t *testing.T) {
+		tmpDir, err := os.MkdirTemp("", "scion-test-yaml-normalize-*")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.RemoveAll(tmpDir)
+
+		configContent := `env:
+  MY-CUSTOM-VAR: hello
+  NORMAL_VAR: world
+`
+		if err := os.WriteFile(filepath.Join(tmpDir, "scion-agent.yaml"), []byte(configContent), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		tpl := &Template{Path: tmpDir}
+		cfg, err := tpl.LoadConfig()
+		if err != nil {
+			t.Fatalf("LoadConfig failed: %v", err)
+		}
+
+		// Top-level key "env" has no hyphens, so it stays as-is.
+		// The nested map keys should NOT be normalized since normalizeYAMLMappingKeys
+		// only processes the top level.
+		if cfg.Env == nil {
+			t.Fatal("expected Env to be non-nil")
+		}
+		if _, ok := cfg.Env["NORMAL_VAR"]; !ok {
+			t.Error("expected NORMAL_VAR in env")
+		}
+	})
+
+	t.Run("full template with mixed hyphen keys", func(t *testing.T) {
+		tmpDir, err := os.MkdirTemp("", "scion-test-yaml-normalize-*")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.RemoveAll(tmpDir)
+
+		configContent := `harness-config: claude-web
+image: us-central1-docker.pkg.dev/my-project/repo/image:latest
+services:
+  - name: chromium
+    command:
+      - "chromium"
+      - "--headless"
+`
+		if err := os.WriteFile(filepath.Join(tmpDir, "scion-agent.yaml"), []byte(configContent), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		tpl := &Template{Path: tmpDir}
+		cfg, err := tpl.LoadConfig()
+		if err != nil {
+			t.Fatalf("LoadConfig failed: %v", err)
+		}
+
+		if cfg.HarnessConfig != "claude-web" {
+			t.Errorf("expected HarnessConfig='claude-web', got %q", cfg.HarnessConfig)
+		}
+		// Image value should NOT be modified (hyphens in values are fine)
+		if cfg.Image != "us-central1-docker.pkg.dev/my-project/repo/image:latest" {
+			t.Errorf("expected Image value preserved with hyphens, got %q", cfg.Image)
+		}
+		if len(cfg.Services) != 1 || cfg.Services[0].Name != "chromium" {
+			t.Errorf("expected 1 service named 'chromium', got %v", cfg.Services)
+		}
+	})
+}
+
+func TestNormalizeYAMLMappingKeys(t *testing.T) {
+	t.Run("normalizes hyphens to underscores in mapping keys", func(t *testing.T) {
+		input := `harness-config: claude-web
+default-harness-config: gemini
+command-args:
+  - "--verbose"
+`
+		var cfg api.ScionConfig
+		if err := unmarshalYAMLNormalized([]byte(input), &cfg); err != nil {
+			t.Fatalf("unmarshalYAMLNormalized failed: %v", err)
+		}
+
+		if cfg.HarnessConfig != "claude-web" {
+			t.Errorf("expected HarnessConfig='claude-web', got %q", cfg.HarnessConfig)
+		}
+		if cfg.DefaultHarnessConfig != "gemini" {
+			t.Errorf("expected DefaultHarnessConfig='gemini', got %q", cfg.DefaultHarnessConfig)
+		}
+		if len(cfg.CommandArgs) != 1 || cfg.CommandArgs[0] != "--verbose" {
+			t.Errorf("expected CommandArgs=['--verbose'], got %v", cfg.CommandArgs)
+		}
+	})
+
+	t.Run("does not modify values", func(t *testing.T) {
+		input := `image: my-registry/my-image:latest
+model: gemini-pro
+`
+		var cfg api.ScionConfig
+		if err := unmarshalYAMLNormalized([]byte(input), &cfg); err != nil {
+			t.Fatalf("unmarshalYAMLNormalized failed: %v", err)
+		}
+
+		if cfg.Image != "my-registry/my-image:latest" {
+			t.Errorf("expected Image value preserved, got %q", cfg.Image)
+		}
+		if cfg.Model != "gemini-pro" {
+			t.Errorf("expected Model value preserved, got %q", cfg.Model)
+		}
+	})
+}
+
 func TestValidateAgentConfig_Telemetry(t *testing.T) {
 	data := []byte(`
 schema_version: "1"

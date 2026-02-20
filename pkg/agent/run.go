@@ -125,11 +125,13 @@ func (m *AgentManager) Start(ctx context.Context, opts api.StartOptions) (*api.A
 	}
 
 	// Default values
-	resolvedImage := "gemini-cli-sandbox"
+	resolvedImage := ""
 	unixUsername := "root"
 	profileName := opts.Profile
 
-	// Load on-disk harness-config for the container user (base layer).
+	slog.Debug("image resolution: starting", "harnessConfigName", harnessConfigName)
+
+	// Load on-disk harness-config for the container user and image (base layer).
 	// The settings map may not define harness_configs, but the on-disk
 	// config.yaml (seeded from harness embeds) always has the user field.
 	// Also check template directories since harness-configs may be bundled
@@ -151,19 +153,30 @@ func (m *AgentManager) Start(ctx context.Context, opts api.StartOptions) (*api.A
 			}
 		}
 		if hcDir, err := config.FindHarnessConfigDir(harnessConfigName, projectDir, templatePaths...); err == nil {
+			if hcDir.Config.Image != "" {
+				resolvedImage = hcDir.Config.Image
+				slog.Debug("image resolution: from on-disk harness-config", "image", resolvedImage, "path", hcDir.Path)
+			}
 			if hcDir.Config.User != "" {
 				unixUsername = hcDir.Config.User
 			}
+		} else {
+			slog.Debug("image resolution: on-disk harness-config not found", "name", harnessConfigName, "err", err)
 		}
 	}
 
 	if settings != nil && harnessConfigName != "" {
 		hConfig, err := settings.ResolveHarnessConfig(opts.Profile, harnessConfigName)
 		if err == nil {
-			resolvedImage = hConfig.Image
+			if hConfig.Image != "" {
+				resolvedImage = hConfig.Image
+				slog.Debug("image resolution: from settings harness-config", "image", resolvedImage)
+			}
 			if hConfig.User != "" {
 				unixUsername = hConfig.User
 			}
+		} else {
+			slog.Debug("image resolution: settings harness-config not found", "name", harnessConfigName)
 		}
 	}
 
@@ -177,12 +190,20 @@ func (m *AgentManager) Start(ctx context.Context, opts api.StartOptions) (*api.A
 
 	if finalScionCfg != nil && finalScionCfg.Image != "" {
 		resolvedImage = finalScionCfg.Image
+		slog.Debug("image resolution: from agent/template config", "image", resolvedImage)
 	}
 
 	// CLI Overrides
 	if opts.Image != "" {
 		resolvedImage = opts.Image
+		slog.Debug("image resolution: from CLI --image flag", "image", resolvedImage)
 	}
+
+	if resolvedImage == "" {
+		return nil, fmt.Errorf("no container image resolved for agent %q. Set 'image' in the harness-config config.yaml, specify --image, or configure a harness-config in settings", opts.Name)
+	}
+
+	slog.Debug("image resolution: final", "image", resolvedImage)
 
 	h := harness.New(harnessName)
 

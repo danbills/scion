@@ -296,7 +296,10 @@ func ProvisionAgent(ctx context.Context, agentName string, templateName string, 
 	// 2b. Resolve harness-config name (full chain)
 	harnessConfigName := harnessConfig // CLI --harness-config flag (highest priority)
 	if harnessConfigName == "" {
-		harnessConfigName = finalScionCfg.DefaultHarnessConfig // template's default
+		harnessConfigName = finalScionCfg.DefaultHarnessConfig // template's default_harness_config
+	}
+	if harnessConfigName == "" {
+		harnessConfigName = finalScionCfg.HarnessConfig // template's harness_config
 	}
 	if harnessConfigName == "" && settings != nil {
 		// Profile's DefaultHarnessConfig

@@ -33,7 +33,7 @@ func seedTestHarnessConfig(t *testing.T, scionDir, name, harnessType string) {
 	t.Helper()
 	hcDir := filepath.Join(scionDir, "harness-configs", name)
 	os.MkdirAll(hcDir, 0755)
-	configYAML := "harness: " + harnessType + "\n"
+	configYAML := "harness: " + harnessType + "\nimage: test-image:latest\n"
 	if err := os.WriteFile(filepath.Join(hcDir, "config.yaml"), []byte(configYAML), 0644); err != nil {
 		t.Fatalf("failed to write harness-config: %v", err)
 	}

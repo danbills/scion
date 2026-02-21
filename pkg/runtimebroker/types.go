@@ -173,6 +173,11 @@ type CreateAgentRequest struct {
 	// WorkspaceStoragePath is the GCS storage path for bootstrapped workspaces.
 	// When set, the broker downloads the workspace from GCS instead of using GrovePath.
 	WorkspaceStoragePath string `json:"workspaceStoragePath,omitempty"`
+
+	// GatherEnv indicates the broker should evaluate env completeness before starting.
+	// If required keys are missing, the broker returns HTTP 202 with EnvRequirementsResponse
+	// instead of starting the agent, allowing the caller to gather and submit the missing values.
+	GatherEnv bool `json:"gatherEnv,omitempty"`
 }
 
 // CreateAgentConfig contains configuration for agent creation.
@@ -211,6 +216,23 @@ type CreateAgentConfig struct {
 type CreateAgentResponse struct {
 	Agent   *AgentResponse `json:"agent"`
 	Created bool           `json:"created"`
+}
+
+// EnvRequirementsResponse is returned by the broker when GatherEnv is true
+// and the merged environment is missing required keys. The broker returns
+// HTTP 202 with this payload instead of starting the agent.
+type EnvRequirementsResponse struct {
+	AgentID   string   `json:"agentId"`
+	Required  []string `json:"required"`
+	HubHas    []string `json:"hubHas"`
+	BrokerHas []string `json:"brokerHas"`
+	Needs     []string `json:"needs"`
+}
+
+// FinalizeEnvRequest is sent to the broker to supply gathered env vars
+// and complete agent creation after a 202 env-gather response.
+type FinalizeEnvRequest struct {
+	Env map[string]string `json:"env"`
 }
 
 // ============================================================================

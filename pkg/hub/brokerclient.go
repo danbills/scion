@@ -289,3 +289,69 @@ func (c *AuthenticatedBrokerClient) CheckAgentPrompt(ctx context.Context, broker
 
 	return result.HasPrompt, nil
 }
+
+// CreateAgentWithGather creates an agent and handles 202 env-gather responses.
+func (c *AuthenticatedBrokerClient) CreateAgentWithGather(ctx context.Context, brokerID, brokerEndpoint string, req *RemoteCreateAgentRequest) (*RemoteAgentResponse, *RemoteEnvRequirementsResponse, error) {
+	endpoint := fmt.Sprintf("%s/api/v1/agents", strings.TrimSuffix(brokerEndpoint, "/"))
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	resp, err := c.doRequest(ctx, brokerID, http.MethodPost, endpoint, body)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, nil, fmt.Errorf("runtime broker returned error %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	if resp.StatusCode == http.StatusAccepted {
+		var envReqs RemoteEnvRequirementsResponse
+		if err := json.NewDecoder(resp.Body).Decode(&envReqs); err != nil {
+			return nil, nil, fmt.Errorf("failed to decode env requirements: %w", err)
+		}
+		return nil, &envReqs, nil
+	}
+
+	var result RemoteAgentResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &result, nil, nil
+}
+
+// FinalizeEnv sends gathered env vars to a broker to complete agent creation.
+func (c *AuthenticatedBrokerClient) FinalizeEnv(ctx context.Context, brokerID, brokerEndpoint, agentID string, env map[string]string) (*RemoteAgentResponse, error) {
+	endpoint := fmt.Sprintf("%s/api/v1/agents/%s/finalize-env", strings.TrimSuffix(brokerEndpoint, "/"), url.PathEscape(agentID))
+
+	body, err := json.Marshal(map[string]interface{}{
+		"env": env,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	resp, err := c.doRequest(ctx, brokerID, http.MethodPost, endpoint, body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("runtime broker returned error %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var result RemoteAgentResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &result, nil
+}

@@ -140,6 +140,14 @@ type AgentDispatcher interface {
 
 	// DispatchCheckAgentPrompt checks if an agent has a non-empty prompt.md file.
 	DispatchCheckAgentPrompt(ctx context.Context, agent *store.Agent) (bool, error)
+
+	// DispatchAgentCreateWithGather creates an agent with env-gather support.
+	// If the broker returns 202 with env requirements, it returns the requirements
+	// instead of an error. The second return value is non-nil when gather is needed.
+	DispatchAgentCreateWithGather(ctx context.Context, agent *store.Agent) (*RemoteEnvRequirementsResponse, error)
+
+	// DispatchFinalizeEnv sends gathered env vars to the broker to complete agent creation.
+	DispatchFinalizeEnv(ctx context.Context, agent *store.Agent, env map[string]string) error
 }
 
 // RuntimeBrokerClient is an interface for communicating with runtime brokers over HTTP.
@@ -176,6 +184,14 @@ type RuntimeBrokerClient interface {
 	// CheckAgentPrompt checks if an agent has a non-empty prompt.md file.
 	// brokerID is used for HMAC authentication lookup.
 	CheckAgentPrompt(ctx context.Context, brokerID, brokerEndpoint, agentID string) (bool, error)
+
+	// FinalizeEnv sends gathered env vars to a broker to complete agent creation
+	// after an initial 202 env-gather response.
+	FinalizeEnv(ctx context.Context, brokerID, brokerEndpoint, agentID string, env map[string]string) (*RemoteAgentResponse, error)
+
+	// CreateAgentWithGather creates an agent and handles 202 env-gather responses.
+	// Returns (response, nil, nil) on success, (nil, envReqs, nil) on 202, or (nil, nil, err) on error.
+	CreateAgentWithGather(ctx context.Context, brokerID, brokerEndpoint string, req *RemoteCreateAgentRequest) (*RemoteAgentResponse, *RemoteEnvRequirementsResponse, error)
 }
 
 // RemoteCreateAgentRequest is the request body for creating an agent on a remote runtime broker.
@@ -207,6 +223,14 @@ type RemoteCreateAgentRequest struct {
 	// WorkspaceStoragePath is the GCS storage path for bootstrapped workspaces.
 	// When set, the broker downloads the workspace from GCS instead of using GrovePath.
 	WorkspaceStoragePath string `json:"workspaceStoragePath,omitempty"`
+
+	// GatherEnv indicates the broker should evaluate env completeness before starting.
+	// If required keys are missing, the broker returns HTTP 202 with env requirements.
+	GatherEnv bool `json:"gatherEnv,omitempty"`
+
+	// EnvSources tracks which scope provided each env var key (for reporting to CLI).
+	// Only populated when GatherEnv is true.
+	EnvSources map[string]string `json:"envSources,omitempty"`
 }
 
 // ResolvedSecret represents a secret resolved by the Hub for projection into an agent container.
@@ -248,6 +272,16 @@ type RemoteAgentConfig struct {
 type RemoteAgentResponse struct {
 	Agent   *RemoteAgentInfo `json:"agent,omitempty"`
 	Created bool             `json:"created"`
+}
+
+// RemoteEnvRequirementsResponse is returned by the broker when env gather is needed.
+// The Hub uses this to relay env requirements back to the CLI.
+type RemoteEnvRequirementsResponse struct {
+	AgentID   string   `json:"agentId"`
+	Required  []string `json:"required"`
+	HubHas    []string `json:"hubHas"`
+	BrokerHas []string `json:"brokerHas"`
+	Needs     []string `json:"needs"`
 }
 
 // RemoteAgentInfo contains agent information from a remote runtime broker.

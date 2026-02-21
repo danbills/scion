@@ -162,6 +162,9 @@ type CreateAgentRequest struct {
 	// WorkspaceFiles is populated for non-git workspace bootstrap.
 	// When present, the Hub generates signed upload URLs instead of dispatching immediately.
 	WorkspaceFiles []transfer.FileInfo `json:"workspaceFiles,omitempty"`
+	// GatherEnv enables the env-gather flow where the broker evaluates env
+	// completeness and may return a 202 requiring the CLI to supply missing values.
+	GatherEnv bool `json:"gatherEnv,omitempty"`
 }
 
 type AgentConfigOverride struct {
@@ -179,6 +182,29 @@ type CreateAgentResponse struct {
 	UploadURLs []transfer.UploadURLInfo `json:"uploadUrls,omitempty"`
 	// Expires indicates when the upload URLs expire.
 	Expires *time.Time `json:"expires,omitempty"`
+	// EnvGather is populated when the broker returns 202, indicating env
+	// vars need to be gathered from the CLI before the agent can start.
+	EnvGather *EnvGatherResponse `json:"envGather,omitempty"`
+}
+
+// EnvGatherResponse contains env requirements relayed from the broker.
+type EnvGatherResponse struct {
+	AgentID   string      `json:"agentId"`
+	Required  []string    `json:"required"`
+	HubHas    []EnvSource `json:"hubHas"`
+	BrokerHas []string    `json:"brokerHas"`
+	Needs     []string    `json:"needs"`
+}
+
+// EnvSource tracks which scope provided an env var key.
+type EnvSource struct {
+	Key   string `json:"key"`
+	Scope string `json:"scope"`
+}
+
+// SubmitEnvRequest is the request body for submitting gathered env vars.
+type SubmitEnvRequest struct {
+	Env map[string]string `json:"env"`
 }
 
 func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {

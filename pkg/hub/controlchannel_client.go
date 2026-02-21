@@ -163,6 +163,86 @@ func (c *ControlChannelBrokerClient) CheckAgentPrompt(ctx context.Context, broke
 	return result.HasPrompt, nil
 }
 
+// CreateAgentWithGather creates an agent and handles 202 env-gather responses via control channel.
+func (c *ControlChannelBrokerClient) CreateAgentWithGather(ctx context.Context, brokerID, brokerEndpoint string, req *RemoteCreateAgentRequest) (*RemoteAgentResponse, *RemoteEnvRequirementsResponse, error) {
+	_ = brokerEndpoint
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	resp, err := c.doRequestRaw(ctx, brokerID, "POST", "/api/v1/agents", "", body)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if resp.StatusCode == http.StatusAccepted {
+		var envReqs RemoteEnvRequirementsResponse
+		if err := json.Unmarshal(resp.Body, &envReqs); err != nil {
+			return nil, nil, fmt.Errorf("failed to decode env requirements: %w", err)
+		}
+		return nil, &envReqs, nil
+	}
+
+	var result RemoteAgentResponse
+	if err := json.Unmarshal(resp.Body, &result); err != nil {
+		return nil, nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &result, nil, nil
+}
+
+// FinalizeEnv sends gathered env vars to a broker to complete agent creation via control channel.
+func (c *ControlChannelBrokerClient) FinalizeEnv(ctx context.Context, brokerID, brokerEndpoint, agentID string, env map[string]string) (*RemoteAgentResponse, error) {
+	_ = brokerEndpoint
+	path := fmt.Sprintf("/api/v1/agents/%s/finalize-env", agentID)
+
+	body, err := json.Marshal(map[string]interface{}{
+		"env": env,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	resp, err := c.doRequest(ctx, brokerID, "POST", path, "", body)
+	if err != nil {
+		return nil, err
+	}
+
+	var result RemoteAgentResponse
+	if err := json.Unmarshal(resp.Body, &result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &result, nil
+}
+
+// doRequestRaw tunnels an HTTP request through the control channel without
+// treating non-2xx status codes as errors. This is needed for env-gather
+// where 202 is a valid non-error response.
+func (c *ControlChannelBrokerClient) doRequestRaw(ctx context.Context, brokerID, method, path, query string, body []byte) (*wsprotocol.ResponseEnvelope, error) {
+	if !c.manager.IsConnected(brokerID) {
+		return nil, fmt.Errorf("broker %s not connected via control channel", brokerID)
+	}
+
+	headers := map[string]string{
+		"Content-Type": "application/json",
+	}
+
+	req := wsprotocol.NewRequestEnvelope(uuid.New().String(), method, path, query, headers, body)
+	resp, err := c.manager.TunnelRequest(ctx, brokerID, req)
+	if err != nil {
+		return nil, fmt.Errorf("control channel request failed: %w", err)
+	}
+
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("runtime broker returned error %d: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	return resp, nil
+}
+
 // doRequest tunnels an HTTP request through the control channel.
 func (c *ControlChannelBrokerClient) doRequest(ctx context.Context, brokerID, method, path, query string, body []byte) (*wsprotocol.ResponseEnvelope, error) {
 	if !c.manager.IsConnected(brokerID) {
@@ -261,4 +341,20 @@ func (c *HybridBrokerClient) CheckAgentPrompt(ctx context.Context, brokerID, bro
 		return c.controlChannel.CheckAgentPrompt(ctx, brokerID, brokerEndpoint, agentID)
 	}
 	return c.httpClient.CheckAgentPrompt(ctx, brokerID, brokerEndpoint, agentID)
+}
+
+// CreateAgentWithGather creates an agent with env-gather support, preferring control channel.
+func (c *HybridBrokerClient) CreateAgentWithGather(ctx context.Context, brokerID, brokerEndpoint string, req *RemoteCreateAgentRequest) (*RemoteAgentResponse, *RemoteEnvRequirementsResponse, error) {
+	if c.useControlChannel(brokerID) {
+		return c.controlChannel.CreateAgentWithGather(ctx, brokerID, brokerEndpoint, req)
+	}
+	return c.httpClient.CreateAgentWithGather(ctx, brokerID, brokerEndpoint, req)
+}
+
+// FinalizeEnv sends gathered env vars to a broker, preferring control channel.
+func (c *HybridBrokerClient) FinalizeEnv(ctx context.Context, brokerID, brokerEndpoint, agentID string, env map[string]string) (*RemoteAgentResponse, error) {
+	if c.useControlChannel(brokerID) {
+		return c.controlChannel.FinalizeEnv(ctx, brokerID, brokerEndpoint, agentID, env)
+	}
+	return c.httpClient.FinalizeEnv(ctx, brokerID, brokerEndpoint, agentID, env)
 }

@@ -53,6 +53,9 @@ type AgentService interface {
 	// SendMessage sends a message to an agent.
 	SendMessage(ctx context.Context, agentID string, message string, interrupt bool) error
 
+	// SubmitEnv submits gathered environment variables for an agent after a 202 env-gather response.
+	SubmitEnv(ctx context.Context, agentID string, req *SubmitEnvRequest) (*CreateAgentResponse, error)
+
 	// Exec executes a command in an agent container.
 	Exec(ctx context.Context, agentID string, command []string, timeout int) (*ExecResponse, error)
 
@@ -114,6 +117,11 @@ type CreateAgentRequest struct {
 	ProvisionOnly bool              `json:"provisionOnly,omitempty"` // If true, provision only (write task to prompt.md) without starting
 	// WorkspaceFiles is populated for non-git workspace bootstrap.
 	WorkspaceFiles []transfer.FileInfo `json:"workspaceFiles,omitempty"`
+
+	// GatherEnv enables the env-gather flow: the Hub/Broker will evaluate env
+	// completeness and return a 202 with requirements if keys are missing,
+	// allowing the CLI to gather and submit them.
+	GatherEnv bool `json:"gatherEnv,omitempty"`
 }
 
 // CreateAgentResponse is the response from creating an agent.
@@ -124,6 +132,32 @@ type CreateAgentResponse struct {
 	UploadURLs []transfer.UploadURLInfo `json:"uploadUrls,omitempty"`
 	// Expires indicates when the upload URLs expire.
 	Expires *time.Time `json:"expires,omitempty"`
+
+	// EnvGather is populated when the Hub returns HTTP 202, indicating the
+	// broker needs additional env vars that only the CLI can provide.
+	EnvGather *EnvGatherResponse `json:"envGather,omitempty"`
+}
+
+// EnvGatherResponse contains env requirements returned by the Hub when the
+// broker cannot satisfy all required environment variables.
+type EnvGatherResponse struct {
+	AgentID   string     `json:"agentId"`
+	Required  []string   `json:"required"`
+	HubHas    []EnvSource `json:"hubHas"`
+	BrokerHas []string   `json:"brokerHas"`
+	Needs     []string   `json:"needs"`
+}
+
+// EnvSource tracks which scope provided an env var key.
+type EnvSource struct {
+	Key   string `json:"key"`
+	Scope string `json:"scope"`
+}
+
+// SubmitEnvRequest is sent by the CLI to provide gathered env vars
+// after receiving a 202 env-gather response.
+type SubmitEnvRequest struct {
+	Env map[string]string `json:"env"`
 }
 
 // UpdateAgentRequest is the request body for updating an agent.
@@ -211,6 +245,15 @@ func (s *agentService) Get(ctx context.Context, agentID string) (*Agent, error) 
 // Create creates a new agent.
 func (s *agentService) Create(ctx context.Context, req *CreateAgentRequest) (*CreateAgentResponse, error) {
 	resp, err := s.c.transport.Post(ctx, s.agentsPath(), req, nil)
+	if err != nil {
+		return nil, err
+	}
+	return apiclient.DecodeResponse[CreateAgentResponse](resp)
+}
+
+// SubmitEnv submits gathered environment variables for an agent after a 202 env-gather response.
+func (s *agentService) SubmitEnv(ctx context.Context, agentID string, req *SubmitEnvRequest) (*CreateAgentResponse, error) {
+	resp, err := s.c.transport.Post(ctx, s.agentPath(agentID)+"/env", req, nil)
 	if err != nil {
 		return nil, err
 	}

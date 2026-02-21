@@ -318,6 +318,95 @@ func (c *HTTPRuntimeBrokerClient) CheckAgentPrompt(ctx context.Context, brokerID
 	return result.HasPrompt, nil
 }
 
+// CreateAgentWithGather creates an agent and handles 202 env-gather responses.
+func (c *HTTPRuntimeBrokerClient) CreateAgentWithGather(ctx context.Context, brokerID, brokerEndpoint string, req *RemoteCreateAgentRequest) (*RemoteAgentResponse, *RemoteEnvRequirementsResponse, error) {
+	_ = brokerID
+	endpoint := fmt.Sprintf("%s/api/v1/agents", strings.TrimSuffix(brokerEndpoint, "/"))
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	if c.debug {
+		slog.Debug("Dispatcher request (gather)", "method", "POST", "endpoint", endpoint)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.client.Do(httpReq)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, nil, fmt.Errorf("runtime broker returned error %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	if resp.StatusCode == http.StatusAccepted {
+		var envReqs RemoteEnvRequirementsResponse
+		if err := json.NewDecoder(resp.Body).Decode(&envReqs); err != nil {
+			return nil, nil, fmt.Errorf("failed to decode env requirements: %w", err)
+		}
+		return nil, &envReqs, nil
+	}
+
+	var result RemoteAgentResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &result, nil, nil
+}
+
+// FinalizeEnv sends gathered env vars to a broker to complete agent creation.
+// Note: brokerID is unused in this unauthenticated client.
+func (c *HTTPRuntimeBrokerClient) FinalizeEnv(ctx context.Context, brokerID, brokerEndpoint, agentID string, env map[string]string) (*RemoteAgentResponse, error) {
+	_ = brokerID
+	endpoint := fmt.Sprintf("%s/api/v1/agents/%s/finalize-env", strings.TrimSuffix(brokerEndpoint, "/"), url.PathEscape(agentID))
+
+	body, err := json.Marshal(map[string]interface{}{
+		"env": env,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	if c.debug {
+		slog.Debug("Dispatcher request", "method", "POST", "endpoint", endpoint)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.client.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("runtime broker returned error %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var result RemoteAgentResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &result, nil
+}
+
 // AgentTokenGenerator generates JWT tokens for agents.
 type AgentTokenGenerator interface {
 	GenerateAgentToken(agentID, groveID string, additionalScopes ...AgentTokenScope) (string, error)
@@ -589,6 +678,171 @@ func (d *HTTPAgentDispatcher) DispatchAgentProvision(ctx context.Context, agent 
 
 	d.applyBrokerResponse(agent, resp)
 	return nil
+}
+
+// DispatchAgentCreateWithGather creates an agent with env-gather support.
+// If the broker returns 202 with env requirements, it returns the requirements
+// as the first value instead of an error.
+func (d *HTTPAgentDispatcher) DispatchAgentCreateWithGather(ctx context.Context, agent *store.Agent) (*RemoteEnvRequirementsResponse, error) {
+	if agent.RuntimeBrokerID == "" {
+		return nil, fmt.Errorf("agent has no runtime broker assigned")
+	}
+
+	endpoint, err := d.getBrokerEndpoint(ctx, agent.RuntimeBrokerID)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := d.buildCreateRequest(ctx, agent, "DispatchAgentCreateWithGather")
+	if err != nil {
+		return nil, err
+	}
+	req.GatherEnv = true
+
+	// Resolve env vars from Hub storage and merge with AppliedConfig.Env
+	envSources, err := d.resolveEnvFromStorage(ctx, agent)
+	if err != nil && d.debug {
+		slog.Warn("Failed to resolve env vars from storage for gather", "error", err)
+	}
+	if len(envSources) > 0 {
+		if req.ResolvedEnv == nil {
+			req.ResolvedEnv = make(map[string]string)
+		}
+		for k, v := range envSources {
+			if _, exists := req.ResolvedEnv[k]; !exists {
+				req.ResolvedEnv[k] = v
+			}
+		}
+	}
+
+	// Track which scope provided each key
+	req.EnvSources = d.buildEnvSources(ctx, agent, req.ResolvedEnv)
+
+	resp, envReqs, err := d.client.CreateAgentWithGather(ctx, agent.RuntimeBrokerID, endpoint, req)
+	if err != nil {
+		return nil, err
+	}
+
+	if envReqs != nil {
+		return envReqs, nil
+	}
+
+	if resp != nil {
+		d.applyBrokerResponse(agent, resp)
+	}
+	return nil, nil
+}
+
+// DispatchFinalizeEnv sends gathered env vars to the broker to complete agent creation.
+func (d *HTTPAgentDispatcher) DispatchFinalizeEnv(ctx context.Context, agent *store.Agent, env map[string]string) error {
+	if agent.RuntimeBrokerID == "" {
+		return fmt.Errorf("agent has no runtime broker assigned")
+	}
+
+	endpoint, err := d.getBrokerEndpoint(ctx, agent.RuntimeBrokerID)
+	if err != nil {
+		return err
+	}
+
+	resp, err := d.client.FinalizeEnv(ctx, agent.RuntimeBrokerID, endpoint, agent.Name, env)
+	if err != nil {
+		return err
+	}
+
+	if resp != nil {
+		d.applyBrokerResponse(agent, resp)
+	}
+	return nil
+}
+
+// resolveEnvFromStorage queries Hub env var storage for all applicable scopes
+// and returns a merged map with precedence: user > grove > global.
+func (d *HTTPAgentDispatcher) resolveEnvFromStorage(ctx context.Context, agent *store.Agent) (map[string]string, error) {
+	result := make(map[string]string)
+
+	// Query grove-scoped env vars
+	if agent.GroveID != "" {
+		vars, err := d.store.ListEnvVars(ctx, store.EnvVarFilter{Scope: "grove", ScopeID: agent.GroveID})
+		if err != nil {
+			if d.debug {
+				slog.Warn("Failed to list grove env vars", "error", err)
+			}
+		} else {
+			for _, v := range vars {
+				result[v.Key] = v.Value
+			}
+		}
+	}
+
+	// Query user-scoped env vars (higher precedence)
+	if agent.OwnerID != "" {
+		vars, err := d.store.ListEnvVars(ctx, store.EnvVarFilter{Scope: "user", ScopeID: agent.OwnerID})
+		if err != nil {
+			if d.debug {
+				slog.Warn("Failed to list user env vars", "error", err)
+			}
+		} else {
+			for _, v := range vars {
+				result[v.Key] = v.Value
+			}
+		}
+	}
+
+	// Query runtime_broker-scoped env vars (if applicable)
+	if agent.RuntimeBrokerID != "" {
+		vars, err := d.store.ListEnvVars(ctx, store.EnvVarFilter{Scope: "runtime_broker", ScopeID: agent.RuntimeBrokerID})
+		if err != nil {
+			if d.debug {
+				slog.Warn("Failed to list broker env vars", "error", err)
+			}
+		} else {
+			for _, v := range vars {
+				result[v.Key] = v.Value
+			}
+		}
+	}
+
+	return result, nil
+}
+
+// buildEnvSources creates a map of env key -> scope for reporting to the CLI.
+func (d *HTTPAgentDispatcher) buildEnvSources(ctx context.Context, agent *store.Agent, resolvedEnv map[string]string) map[string]string {
+	sources := make(map[string]string)
+
+	// Check grove scope
+	if agent.GroveID != "" {
+		vars, err := d.store.ListEnvVars(ctx, store.EnvVarFilter{Scope: "grove", ScopeID: agent.GroveID})
+		if err == nil {
+			for _, v := range vars {
+				if _, inResolved := resolvedEnv[v.Key]; inResolved {
+					sources[v.Key] = "grove"
+				}
+			}
+		}
+	}
+
+	// Check user scope (overrides grove)
+	if agent.OwnerID != "" {
+		vars, err := d.store.ListEnvVars(ctx, store.EnvVarFilter{Scope: "user", ScopeID: agent.OwnerID})
+		if err == nil {
+			for _, v := range vars {
+				if _, inResolved := resolvedEnv[v.Key]; inResolved {
+					sources[v.Key] = "user"
+				}
+			}
+		}
+	}
+
+	// Check config scope
+	if agent.AppliedConfig != nil {
+		for k := range agent.AppliedConfig.Env {
+			if _, inResolved := resolvedEnv[k]; inResolved {
+				sources[k] = "config"
+			}
+		}
+	}
+
+	return sources
 }
 
 // DispatchAgentStart starts an agent on the runtime broker.

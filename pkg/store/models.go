@@ -61,9 +61,10 @@ type Agent struct {
 	AppliedConfig *AgentAppliedConfig `json:"appliedConfig,omitempty"`
 
 	// Timestamps
-	Created  time.Time `json:"created"`
-	Updated  time.Time `json:"updated"`
-	LastSeen time.Time `json:"lastSeen,omitempty"`
+	Created   time.Time `json:"created"`
+	Updated   time.Time `json:"updated"`
+	LastSeen  time.Time `json:"lastSeen,omitempty"`
+	DeletedAt time.Time `json:"deletedAt,omitempty"`
 
 	// Ownership
 	CreatedBy  string `json:"createdBy,omitempty"`
@@ -116,6 +117,8 @@ const (
 	AgentStatusIdle            = "idle"
 	AgentStatusWaitingForInput = "waiting_for_input"
 	AgentStatusCompleted       = "completed"
+	AgentStatusDeleted         = "deleted"
+	AgentStatusRestored        = "restored"
 )
 
 // Grove represents a project/agent group in the Hub database.
@@ -797,9 +800,10 @@ func (a *Agent) ToAPI() *api.AgentInfo {
 		TaskSummary:   a.TaskSummary,
 
 		// Timestamps
-		Created:  a.Created,
-		Updated:  a.Updated,
-		LastSeen: a.LastSeen,
+		Created:   a.Created,
+		Updated:   a.Updated,
+		LastSeen:  a.LastSeen,
+		DeletedAt: a.DeletedAt,
 
 		// Ownership
 		CreatedBy:  a.CreatedBy,

@@ -17,6 +17,7 @@ package store
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 // Common errors returned by store implementations.
@@ -109,14 +110,19 @@ type AgentStore interface {
 	// UpdateAgentStatus updates only status-related fields.
 	// This is a partial update that doesn't require version checking.
 	UpdateAgentStatus(ctx context.Context, id string, status AgentStatusUpdate) error
+
+	// PurgeDeletedAgents permanently removes soft-deleted agents older than cutoff.
+	// Returns the number of agents purged.
+	PurgeDeletedAgents(ctx context.Context, cutoff time.Time) (int, error)
 }
 
 // AgentFilter defines criteria for filtering agents.
 type AgentFilter struct {
-	GroveID       string
+	GroveID         string
 	RuntimeBrokerID string
-	Status        string
-	OwnerID       string
+	Status          string
+	OwnerID         string
+	IncludeDeleted  bool // If true, include soft-deleted agents in results
 }
 
 // AgentStatusUpdate contains fields for status-only updates.

@@ -248,6 +248,13 @@ func WorkspaceStoragePath(groveID, agentID string) string {
 	return "workspaces/" + groveID + "/" + agentID
 }
 
+// GroveWorkspaceStoragePath returns the storage path for a hub-native grove's shared workspace.
+// Hub-native groves share a single workspace across agents (no per-agent worktrees),
+// so the path is grove-level rather than agent-level.
+func GroveWorkspaceStoragePath(groveID string) string {
+	return "workspaces/" + groveID + "/grove-workspace"
+}
+
 // WorkspaceStorageURI returns the full storage URI for an agent's workspace.
 func WorkspaceStorageURI(bucket, groveID, agentID string) string {
 	path := WorkspaceStoragePath(groveID, agentID)

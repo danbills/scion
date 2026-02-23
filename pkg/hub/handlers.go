@@ -28,6 +28,7 @@ import (
 
 	"github.com/ptone/scion-agent/pkg/api"
 	"github.com/ptone/scion-agent/pkg/config"
+	"github.com/ptone/scion-agent/pkg/gcp"
 	"github.com/ptone/scion-agent/pkg/secret"
 	"github.com/ptone/scion-agent/pkg/storage"
 	"github.com/ptone/scion-agent/pkg/store"
@@ -500,6 +501,37 @@ func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 				Expires:    &expires,
 			})
 			return
+		}
+	}
+
+	// Hub-native grove remote broker support: if the grove has no git remote
+	// (hub-native) and the workspace is set, upload it to GCS so a remote broker
+	// can download it. This mirrors the workspace bootstrap pattern above.
+	if grove != nil && grove.GitRemote == "" && agent.AppliedConfig != nil && agent.AppliedConfig.Workspace != "" {
+		hasLocalPath := false
+		if runtimeBrokerID != "" {
+			provider, err := s.store.GetGroveProvider(ctx, grove.ID, runtimeBrokerID)
+			if err == nil && provider.LocalPath != "" {
+				hasLocalPath = true
+			}
+		}
+
+		if !hasLocalPath {
+			stor := s.GetStorage()
+			if stor != nil {
+				storagePath := storage.GroveWorkspaceStoragePath(grove.ID)
+				if err := gcp.SyncToGCS(ctx, agent.AppliedConfig.Workspace, stor.Bucket(), storagePath+"/files"); err != nil {
+					slog.Warn("Failed to upload hub-native grove workspace to GCS",
+						"grove", grove.ID, "error", err)
+				} else {
+					// Swap workspace to storage path for remote broker
+					agent.AppliedConfig.Workspace = ""
+					agent.AppliedConfig.WorkspaceStoragePath = storagePath
+					if err := s.store.UpdateAgent(ctx, agent); err != nil {
+						slog.Warn("Failed to update agent with workspace storage path", "error", err)
+					}
+				}
+			}
 		}
 	}
 
@@ -1282,6 +1314,9 @@ func (s *Server) handleAgentLifecycle(w http.ResponseWriter, r *http.Request, id
 	case "stop":
 		newStatus = store.AgentStatusStopped
 		if dispatcher != nil && agent.RuntimeBrokerID != "" {
+			// Before stopping, sync workspace back for hub-native groves on remote brokers.
+			// This is best-effort: failures are logged but don't block the stop.
+			s.syncWorkspaceOnStop(ctx, agent)
 			dispatchErr = dispatcher.DispatchAgentStop(ctx, agent)
 		}
 	case "restart":
@@ -1560,6 +1595,61 @@ func (s *Server) initHubNativeGrove(grove *store.Grove) error {
 	}
 
 	return nil
+}
+
+// syncWorkspaceOnStop triggers a best-effort workspace sync-back for hub-native groves
+// on remote brokers before the agent is stopped. It uploads the workspace from the
+// broker to GCS via the control channel, then downloads from GCS to the Hub filesystem.
+func (s *Server) syncWorkspaceOnStop(ctx context.Context, agent *store.Agent) {
+	if agent.GroveID == "" || agent.RuntimeBrokerID == "" {
+		return
+	}
+
+	grove, err := s.store.GetGrove(ctx, agent.GroveID)
+	if err != nil || grove.GitRemote != "" {
+		return // Not hub-native or grove not found
+	}
+
+	// Check if broker is remote (no local path)
+	provider, err := s.store.GetGroveProvider(ctx, grove.ID, agent.RuntimeBrokerID)
+	if err == nil && provider.LocalPath != "" {
+		return // Colocated broker, no sync needed
+	}
+
+	stor := s.GetStorage()
+	cc := s.GetControlChannelManager()
+	if stor == nil || cc == nil {
+		return
+	}
+
+	storagePath := storage.GroveWorkspaceStoragePath(grove.ID)
+
+	// Tunnel upload request to the broker
+	uploadReq := RuntimeBrokerWorkspaceUploadRequest{
+		Slug:        agent.Name,
+		StoragePath: storagePath,
+	}
+	var uploadResp RuntimeBrokerWorkspaceUploadResponse
+	if err := tunnelWorkspaceRequest(ctx, cc, agent.RuntimeBrokerID, "POST", "/api/v1/workspace/upload", uploadReq, &uploadResp); err != nil {
+		slog.Warn("syncWorkspaceOnStop: failed to upload workspace from broker",
+			"agent", agent.Name, "grove", grove.ID, "error", err)
+		return
+	}
+
+	// Download from GCS to Hub filesystem
+	workspacePath, err := hubNativeGrovePath(grove.Slug)
+	if err != nil {
+		slog.Warn("syncWorkspaceOnStop: failed to get grove path", "error", err)
+		return
+	}
+
+	if err := gcp.SyncFromGCS(ctx, stor.Bucket(), storagePath+"/files", workspacePath); err != nil {
+		slog.Warn("syncWorkspaceOnStop: GCS download failed",
+			"grove", grove.ID, "error", err)
+	} else {
+		slog.Info("syncWorkspaceOnStop: workspace synced back to Hub",
+			"grove", grove.ID, "path", workspacePath)
+	}
 }
 
 func (s *Server) handleGroveRegister(w http.ResponseWriter, r *http.Request) {

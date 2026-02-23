@@ -529,6 +529,15 @@ func (d *HTTPAgentDispatcher) buildCreateRequest(ctx context.Context, agent *sto
 		req.WorkspaceStoragePath = agent.AppliedConfig.WorkspaceStoragePath
 	}
 
+	// For hub-native groves, propagate the grove slug so the broker can create
+	// the workspace at the conventional path (~/.scion/groves/<slug>/).
+	if agent.GroveID != "" {
+		grove, err := d.store.GetGrove(ctx, agent.GroveID)
+		if err == nil && grove.GitRemote == "" {
+			req.GroveSlug = grove.Slug
+		}
+	}
+
 	if d.debug {
 		slog.Debug(callerName,
 			"agentName", agent.Name,

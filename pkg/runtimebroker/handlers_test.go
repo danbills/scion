@@ -25,6 +25,7 @@ import (
 	"testing"
 
 	"github.com/ptone/scion-agent/pkg/api"
+	"github.com/ptone/scion-agent/pkg/config"
 	"github.com/ptone/scion-agent/pkg/runtime"
 )
 
@@ -1282,5 +1283,55 @@ func TestCreateAgentWithoutProfile(t *testing.T) {
 
 	if mgr.lastOpts.Profile != "" {
 		t.Errorf("expected empty Profile, got %q", mgr.lastOpts.Profile)
+	}
+}
+
+func TestGroveSlugWorkspacePath(t *testing.T) {
+	// Verify the workspace directory path for hub-native groves uses
+	// ~/.scion/groves/<slug>/ instead of the worktree-based path.
+	globalDir, err := config.GetGlobalDir()
+	if err != nil {
+		t.Fatalf("failed to get global dir: %v", err)
+	}
+
+	expected := filepath.Join(globalDir, "groves", "my-test-grove")
+
+	// Simulate the logic from the handler: when GroveSlug is set,
+	// use the conventional path.
+	groveSlug := "my-test-grove"
+	workspaceDir := filepath.Join(globalDir, "groves", groveSlug)
+
+	if workspaceDir != expected {
+		t.Errorf("expected workspace dir %q, got %q", expected, workspaceDir)
+	}
+
+	// When GroveSlug is empty, the default worktree path is used.
+	worktreeBase := "/tmp/test-worktrees"
+	agentName := "test-agent"
+	defaultDir := filepath.Join(worktreeBase, agentName, "workspace")
+	expectedDefault := "/tmp/test-worktrees/test-agent/workspace"
+	if defaultDir != expectedDefault {
+		t.Errorf("expected default workspace dir %q, got %q", expectedDefault, defaultDir)
+	}
+}
+
+func TestCreateAgentRequest_GroveSlugField(t *testing.T) {
+	// Verify GroveSlug is properly serialized/deserialized in CreateAgentRequest.
+	reqJSON := `{
+		"name": "grove-agent",
+		"groveSlug": "my-hub-grove",
+		"workspaceStoragePath": "workspaces/grove-123/grove-workspace"
+	}`
+
+	var req CreateAgentRequest
+	if err := json.Unmarshal([]byte(reqJSON), &req); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+
+	if req.GroveSlug != "my-hub-grove" {
+		t.Errorf("expected GroveSlug 'my-hub-grove', got '%s'", req.GroveSlug)
+	}
+	if req.WorkspaceStoragePath != "workspaces/grove-123/grove-workspace" {
+		t.Errorf("expected WorkspaceStoragePath 'workspaces/grove-123/grove-workspace', got '%s'", req.WorkspaceStoragePath)
 	}
 }

@@ -875,3 +875,90 @@ func TestErrRuntimeBrokerError(t *testing.T) {
 		t.Errorf("status code = %d, want 503", hostErr.statusCode)
 	}
 }
+
+func TestSyncHubNativeWorkspaceBack_SkipsGitGrove(t *testing.T) {
+	srv, st := testWorkspaceServer(t)
+	ctx := context.Background()
+
+	// Create a git-backed grove (has GitRemote)
+	grove := &store.Grove{
+		ID:        "grove-git-sync",
+		Slug:      "grove-git-sync",
+		Name:      "Git Grove",
+		GitRemote: "github.com/test/repo",
+	}
+	if err := st.CreateGrove(ctx, grove); err != nil {
+		t.Fatalf("failed to create grove: %v", err)
+	}
+
+	agent := &store.Agent{
+		ID:      "agent-sync-1",
+		GroveID: "grove-git-sync",
+	}
+
+	// This should return without doing anything for git-backed groves
+	srv.syncHubNativeWorkspaceBack(ctx, agent, "workspaces/grove-git-sync/agent-sync-1")
+	// No panic/error = success
+}
+
+func TestSyncHubNativeWorkspaceBack_SkipsColocatedBroker(t *testing.T) {
+	srv, st := testWorkspaceServer(t)
+	ctx := context.Background()
+
+	// Create a hub-native grove
+	grove := &store.Grove{
+		ID:   "grove-colo-sync",
+		Slug: "grove-colo-sync",
+		Name: "Hub Native Colo",
+		// No GitRemote = hub-native
+	}
+	if err := st.CreateGrove(ctx, grove); err != nil {
+		t.Fatalf("failed to create grove: %v", err)
+	}
+
+	// Create a broker with local path (colocated)
+	broker := &store.RuntimeBroker{
+		ID:       "broker-colo",
+		Name:     "colo-broker",
+		Slug:     "colo-broker",
+		Endpoint: "http://localhost:9800",
+		Status:   store.BrokerStatusOnline,
+	}
+	if err := st.CreateRuntimeBroker(ctx, broker); err != nil {
+		t.Fatalf("failed to create broker: %v", err)
+	}
+	provider := &store.GroveProvider{
+		GroveID:    "grove-colo-sync",
+		BrokerID:   "broker-colo",
+		BrokerName: "colo-broker",
+		LocalPath:  "/home/user/.scion",
+		Status:     store.BrokerStatusOnline,
+	}
+	if err := st.AddGroveProvider(ctx, provider); err != nil {
+		t.Fatalf("failed to add provider: %v", err)
+	}
+
+	agent := &store.Agent{
+		ID:              "agent-colo-sync",
+		GroveID:         "grove-colo-sync",
+		RuntimeBrokerID: "broker-colo",
+	}
+
+	// Should skip sync because broker has local path
+	srv.syncHubNativeWorkspaceBack(ctx, agent, "workspaces/grove-colo-sync/grove-workspace")
+	// No panic/error = success
+}
+
+func TestSyncHubNativeWorkspaceBack_NoGroveID(t *testing.T) {
+	srv, _ := testWorkspaceServer(t)
+	ctx := context.Background()
+
+	agent := &store.Agent{
+		ID:      "agent-no-grove",
+		GroveID: "", // No grove ID
+	}
+
+	// Should return immediately
+	srv.syncHubNativeWorkspaceBack(ctx, agent, "some-path")
+	// No panic/error = success
+}

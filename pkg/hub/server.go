@@ -243,6 +243,11 @@ type RemoteCreateAgentRequest struct {
 	// EnvSources tracks which scope provided each env var key (for reporting to CLI).
 	// Only populated when GatherEnv is true.
 	EnvSources map[string]string `json:"envSources,omitempty"`
+
+	// GroveSlug is the grove slug for hub-native groves.
+	// When set, the broker creates the workspace at ~/.scion/groves/<slug>/
+	// instead of the default worktree-based path.
+	GroveSlug string `json:"groveSlug,omitempty"`
 }
 
 // ResolvedSecret represents a secret resolved by the Hub for projection into an agent container.

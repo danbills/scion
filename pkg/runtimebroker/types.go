@@ -181,6 +181,11 @@ type CreateAgentRequest struct {
 	// When set, the broker downloads the workspace from GCS instead of using GrovePath.
 	WorkspaceStoragePath string `json:"workspaceStoragePath,omitempty"`
 
+	// GroveSlug is the grove slug for hub-native groves.
+	// When set, the broker creates the workspace at ~/.scion/groves/<slug>/
+	// instead of the default worktree-based path.
+	GroveSlug string `json:"groveSlug,omitempty"`
+
 	// GatherEnv indicates the broker should evaluate env completeness before starting.
 	// If required keys are missing, the broker returns HTTP 202 with EnvRequirementsResponse
 	// instead of starting the agent, allowing the caller to gather and submit the missing values.

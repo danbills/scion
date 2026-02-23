@@ -1275,6 +1275,113 @@ func TestHTTPAgentDispatcher_DispatchAgentCreate_PropagatesProfile(t *testing.T)
 	}
 }
 
+func TestHTTPAgentDispatcher_DispatchAgentCreate_PropagatesGroveSlug_HubNative(t *testing.T) {
+	ctx := context.Background()
+	memStore := createTestStore(t)
+
+	// Create a hub-native grove (no GitRemote)
+	grove := &store.Grove{
+		ID:   "grove-hub-native",
+		Name: "Hub Native Grove",
+		Slug: "hub-native-grove",
+		// No GitRemote = hub-native
+	}
+	if err := memStore.CreateGrove(ctx, grove); err != nil {
+		t.Fatalf("failed to create grove: %v", err)
+	}
+
+	broker := &store.RuntimeBroker{
+		ID:       "host-1",
+		Name:     "test-host",
+		Slug:     "test-host",
+		Endpoint: "http://localhost:9800",
+		Status:   store.BrokerStatusOnline,
+	}
+	if err := memStore.CreateRuntimeBroker(ctx, broker); err != nil {
+		t.Fatalf("failed to create runtime broker: %v", err)
+	}
+
+	mockClient := &mockRuntimeBrokerClient{}
+	dispatcher := NewHTTPAgentDispatcherWithClient(memStore, mockClient, false)
+
+	agent := &store.Agent{
+		ID:              "agent-1",
+		Name:            "test-agent",
+		Slug:            "test-agent",
+		GroveID:         "grove-hub-native",
+		RuntimeBrokerID: "host-1",
+		AppliedConfig: &store.AgentAppliedConfig{
+			Harness: "claude",
+		},
+	}
+
+	err := dispatcher.DispatchAgentCreate(ctx, agent)
+	if err != nil {
+		t.Fatalf("DispatchAgentCreate failed: %v", err)
+	}
+
+	if !mockClient.createCalled {
+		t.Fatal("expected CreateAgent to be called")
+	}
+	if mockClient.lastCreateReq.GroveSlug != "hub-native-grove" {
+		t.Errorf("expected GroveSlug 'hub-native-grove', got '%s'", mockClient.lastCreateReq.GroveSlug)
+	}
+}
+
+func TestHTTPAgentDispatcher_DispatchAgentCreate_NoGroveSlug_GitGrove(t *testing.T) {
+	ctx := context.Background()
+	memStore := createTestStore(t)
+
+	// Create a git-backed grove (has GitRemote)
+	grove := &store.Grove{
+		ID:        "grove-git",
+		Name:      "Git Grove",
+		Slug:      "git-grove",
+		GitRemote: "github.com/test/repo",
+	}
+	if err := memStore.CreateGrove(ctx, grove); err != nil {
+		t.Fatalf("failed to create grove: %v", err)
+	}
+
+	broker := &store.RuntimeBroker{
+		ID:       "host-1",
+		Name:     "test-host",
+		Slug:     "test-host",
+		Endpoint: "http://localhost:9800",
+		Status:   store.BrokerStatusOnline,
+	}
+	if err := memStore.CreateRuntimeBroker(ctx, broker); err != nil {
+		t.Fatalf("failed to create runtime broker: %v", err)
+	}
+
+	mockClient := &mockRuntimeBrokerClient{}
+	dispatcher := NewHTTPAgentDispatcherWithClient(memStore, mockClient, false)
+
+	agent := &store.Agent{
+		ID:              "agent-1",
+		Name:            "test-agent",
+		Slug:            "test-agent",
+		GroveID:         "grove-git",
+		RuntimeBrokerID: "host-1",
+		AppliedConfig: &store.AgentAppliedConfig{
+			Harness: "claude",
+		},
+	}
+
+	err := dispatcher.DispatchAgentCreate(ctx, agent)
+	if err != nil {
+		t.Fatalf("DispatchAgentCreate failed: %v", err)
+	}
+
+	if !mockClient.createCalled {
+		t.Fatal("expected CreateAgent to be called")
+	}
+	// Git-backed groves should NOT have GroveSlug set
+	if mockClient.lastCreateReq.GroveSlug != "" {
+		t.Errorf("expected empty GroveSlug for git-backed grove, got '%s'", mockClient.lastCreateReq.GroveSlug)
+	}
+}
+
 func TestHTTPAgentDispatcher_DispatchAgentCreate_EmptyProfile(t *testing.T) {
 	ctx := context.Background()
 	memStore := createTestStore(t)

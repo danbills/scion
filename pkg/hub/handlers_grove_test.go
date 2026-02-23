@@ -121,6 +121,31 @@ func TestPopulateAgentConfig_HubNativeGrove_SetsWorkspace(t *testing.T) {
 		"GitClone should not be set for hub-native groves")
 }
 
+func TestPopulateAgentConfig_HubNativeGrove_RemoteBroker_WorkspaceSet(t *testing.T) {
+	srv, _ := testServer(t)
+
+	grove := &store.Grove{
+		ID:   "grove-hub-native-remote",
+		Name: "Hub Native Remote",
+		Slug: "hub-native-remote",
+		// No GitRemote — hub-native grove
+	}
+
+	agent := &store.Agent{
+		ID:            "agent-remote",
+		AppliedConfig: &store.AgentAppliedConfig{},
+	}
+
+	srv.populateAgentConfig(agent, grove, nil)
+
+	// populateAgentConfig sets Workspace for hub-native groves.
+	// For remote brokers, the createAgent handler later swaps this to
+	// WorkspaceStoragePath. Here we verify the initial workspace is set.
+	expectedPath, err := hubNativeGrovePath("hub-native-remote")
+	require.NoError(t, err)
+	assert.Equal(t, expectedPath, agent.AppliedConfig.Workspace)
+}
+
 func TestPopulateAgentConfig_GitGrove_NoWorkspace(t *testing.T) {
 	srv, _ := testServer(t)
 

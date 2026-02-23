@@ -137,3 +137,31 @@ func TestWorkspaceStorageURI(t *testing.T) {
 		})
 	}
 }
+
+func TestGroveWorkspaceStoragePath(t *testing.T) {
+	tests := []struct {
+		name    string
+		groveID string
+		want    string
+	}{
+		{
+			name:    "basic grove path",
+			groveID: "grove-abc",
+			want:    "workspaces/grove-abc/grove-workspace",
+		},
+		{
+			name:    "with UUID grove ID",
+			groveID: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+			want:    "workspaces/a1b2c3d4-e5f6-7890-abcd-ef1234567890/grove-workspace",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := GroveWorkspaceStoragePath(tt.groveID)
+			if got != tt.want {
+				t.Errorf("GroveWorkspaceStoragePath() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

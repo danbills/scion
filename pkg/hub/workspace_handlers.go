@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/ptone/scion-agent/pkg/gcp"
 	"github.com/ptone/scion-agent/pkg/storage"
 	"github.com/ptone/scion-agent/pkg/store"
 	"github.com/ptone/scion-agent/pkg/transfer"
@@ -263,6 +264,10 @@ func (s *Server) handleWorkspaceSyncFrom(w http.ResponseWriter, r *http.Request,
 			Hash: file.Hash,
 		})
 	}
+
+	// For hub-native groves on remote brokers, also sync workspace back
+	// to the Hub filesystem so the local copy stays up-to-date.
+	s.syncHubNativeWorkspaceBack(ctx, agent, storagePath)
 
 	writeJSON(w, http.StatusOK, SyncFromResponse{
 		Manifest:     uploadResp.Manifest,
@@ -633,4 +638,54 @@ func (e *brokerError) Error() string {
 		return "broker " + e.brokerID + ": " + e.msg
 	}
 	return e.msg
+}
+
+// syncHubNativeWorkspaceBack downloads workspace files from GCS to the Hub's local
+// filesystem for hub-native groves on remote brokers. This keeps the Hub's copy
+// (~/.scion/groves/<slug>/) in sync after workspace changes on a remote broker.
+// This is a best-effort operation: errors are logged but do not fail the caller.
+func (s *Server) syncHubNativeWorkspaceBack(ctx context.Context, agent *store.Agent, storagePath string) {
+	if agent.GroveID == "" {
+		return
+	}
+
+	grove, err := s.store.GetGrove(ctx, agent.GroveID)
+	if err != nil {
+		slog.Warn("syncHubNativeWorkspaceBack: failed to get grove", "groveID", agent.GroveID, "error", err)
+		return
+	}
+
+	// Only applies to hub-native groves (no git remote)
+	if grove.GitRemote != "" {
+		return
+	}
+
+	// Only needed for remote brokers (no local path)
+	if agent.RuntimeBrokerID != "" {
+		provider, err := s.store.GetGroveProvider(ctx, grove.ID, agent.RuntimeBrokerID)
+		if err == nil && provider.LocalPath != "" {
+			return // Colocated broker, no sync needed
+		}
+	}
+
+	stor := s.GetStorage()
+	if stor == nil {
+		return
+	}
+
+	workspacePath, err := hubNativeGrovePath(grove.Slug)
+	if err != nil {
+		slog.Warn("syncHubNativeWorkspaceBack: failed to get grove path", "error", err)
+		return
+	}
+
+	// Use the grove-level storage path for hub-native groves
+	groveStoragePath := storage.GroveWorkspaceStoragePath(grove.ID)
+	if err := gcp.SyncFromGCS(ctx, stor.Bucket(), groveStoragePath+"/files", workspacePath); err != nil {
+		slog.Warn("syncHubNativeWorkspaceBack: GCS download failed",
+			"grove", grove.ID, "storagePath", groveStoragePath, "error", err)
+	} else {
+		slog.Info("syncHubNativeWorkspaceBack: workspace synced to Hub filesystem",
+			"grove", grove.ID, "path", workspacePath)
+	}
 }

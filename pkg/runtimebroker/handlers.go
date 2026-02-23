@@ -507,7 +507,19 @@ func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 
 	// If WorkspaceStoragePath is set, download workspace from GCS (non-git bootstrap)
 	if req.WorkspaceStoragePath != "" {
-		workspaceDir := filepath.Join(s.config.WorktreeBase, req.Name, "workspace")
+		// For hub-native groves (GroveSlug set), use the conventional path
+		// ~/.scion/groves/<slug>/ instead of the worktree-based path.
+		var workspaceDir string
+		if req.GroveSlug != "" {
+			globalDir, err := config.GetGlobalDir()
+			if err != nil {
+				RuntimeError(w, "Failed to get global dir: "+err.Error())
+				return
+			}
+			workspaceDir = filepath.Join(globalDir, "groves", req.GroveSlug)
+		} else {
+			workspaceDir = filepath.Join(s.config.WorktreeBase, req.Name, "workspace")
+		}
 		if err := os.MkdirAll(workspaceDir, 0755); err != nil {
 			RuntimeError(w, "Failed to create workspace directory: "+err.Error())
 			return
@@ -524,6 +536,7 @@ func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 				"bucket", bucket,
 				"storagePath", req.WorkspaceStoragePath+"/files",
 				"workspaceDir", workspaceDir,
+				"groveSlug", req.GroveSlug,
 			)
 		}
 

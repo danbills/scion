@@ -907,10 +907,12 @@ func runServerStart(cmd *cobra.Command, args []string) error {
 			// Control channel - always enabled when Hub is configured because
 			// PTY proxying requires the WebSocket control channel to route
 			// terminal I/O between clients and brokers.
-			// Heartbeat - disabled for co-located operation since we use
-			// the internal database heartbeat loop instead.
+			// Heartbeat - enabled whenever a hub endpoint is configured.
+			// The co-located "local" connection skips HTTP heartbeat via its
+			// IsColocated flag (internal DB loop handles it instead).
+			// Remote file-based connections always use HTTP heartbeat.
 			ControlChannelEnabled: hubEndpointForRH != "",
-			HeartbeatEnabled:      hubEndpointForRH != "" && (simulateRemoteBroker || !enableHub),
+			HeartbeatEnabled:      hubEndpointForRH != "",
 
 			// In-memory credentials for co-located mode (allows control channel without file-based creds)
 			InMemoryCredentials: inMemoryCreds,

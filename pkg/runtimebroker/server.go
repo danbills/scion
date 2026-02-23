@@ -226,7 +226,7 @@ func (s *Server) initHubIntegration() error {
 
 	// 2. Initialize hub connections map (already done in New)
 
-	// 3. Handle InMemoryCredentials -> "local" connection
+	// 3. Handle InMemoryCredentials -> "local" connection (co-located mode)
 	if s.config.InMemoryCredentials != nil {
 		creds := s.config.InMemoryCredentials
 		if creds.Name == "" {
@@ -236,6 +236,9 @@ func (s *Server) initHubIntegration() error {
 		if err != nil {
 			slog.Warn("Failed to create local hub connection", "error", err)
 		} else {
+			// Mark as co-located so heartbeat is handled by the internal DB loop
+			// instead of the HTTP heartbeat service.
+			conn.IsColocated = true
 			s.hubMu.Lock()
 			s.hubConnections[creds.Name] = conn
 			s.hubMu.Unlock()
@@ -579,6 +582,9 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 	s.hubMu.RUnlock()
 
+	// Log a summary of all hub connections
+	s.logHubConnections()
+
 	// Start credential watcher for dynamic reload
 	if s.config.HubEnabled && s.multiCredStore != nil {
 		s.startCredentialWatcher(ctx)
@@ -900,6 +906,49 @@ func (s *Server) getFirstHeartbeat() *HeartbeatService {
 		}
 	}
 	return nil
+}
+
+// logHubConnections logs a summary of all active hub connections.
+func (s *Server) logHubConnections() {
+	s.hubMu.RLock()
+	defer s.hubMu.RUnlock()
+
+	count := len(s.hubConnections)
+	if count == 0 {
+		slog.Info("No hub connections configured")
+		return
+	}
+
+	for _, conn := range s.hubConnections {
+		attrs := []slog.Attr{
+			slog.String("name", conn.Name),
+			slog.String("endpoint", conn.HubEndpoint),
+			slog.String("status", string(conn.GetStatus())),
+		}
+
+		if conn.AuthMode != "" {
+			attrs = append(attrs, slog.String("auth", string(conn.AuthMode)))
+		}
+
+		if conn.IsColocated {
+			attrs = append(attrs, slog.Bool("colocated", true))
+		}
+
+		hasHeartbeat := conn.Heartbeat != nil
+		hasControlChannel := conn.ControlChannel != nil
+		attrs = append(attrs,
+			slog.Bool("heartbeat", hasHeartbeat),
+			slog.Bool("control_channel", hasControlChannel),
+		)
+
+		slog.LogAttrs(context.Background(), slog.LevelInfo, "Hub connection active", attrs...)
+	}
+
+	mode := "single-hub"
+	if count > 1 {
+		mode = "multi-hub"
+	}
+	slog.Info("Hub connections summary", "total", count, "mode", mode)
 }
 
 // registerRoutes sets up all API routes.

@@ -818,6 +818,448 @@ func TestHubConnection_Stop(t *testing.T) {
 	}
 }
 
+// ============================================================================
+// Phase 3: Co-located + Remote Combo Tests
+// ============================================================================
+
+func TestColocated_LocalConnection_SkipsHeartbeat(t *testing.T) {
+	// When a connection is marked as IsColocated, Start() should NOT create
+	// a heartbeat service (the internal DB loop handles it instead).
+	creds := makeTestCreds("local", "broker-1", "http://localhost:8080")
+	srv := newTestServerWithInMemoryCreds(creds)
+
+	srv.hubMu.RLock()
+	conn, ok := srv.hubConnections["local"]
+	srv.hubMu.RUnlock()
+
+	if !ok {
+		t.Fatal("expected 'local' connection to exist")
+	}
+
+	if !conn.IsColocated {
+		t.Error("expected 'local' connection to be marked as co-located")
+	}
+
+	// Start the connection (heartbeat should be skipped for co-located)
+	cfg := srv.config
+	cfg.HeartbeatEnabled = true
+	cfg.ControlChannelEnabled = false // disable control channel for this test
+	srv.config = cfg
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := conn.Start(ctx, srv); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+
+	if conn.Heartbeat != nil {
+		t.Error("expected co-located connection to NOT have heartbeat service")
+	}
+}
+
+func TestColocated_RemoteConnection_GetsHeartbeat(t *testing.T) {
+	// A non-co-located (remote) connection should get a heartbeat service
+	// when HeartbeatEnabled is true.
+	remoteCreds := makeTestCreds("hub-prod", "broker-1", "https://hub.prod.example.com")
+
+	cfg := DefaultServerConfig()
+	cfg.BrokerID = "broker-1"
+	cfg.BrokerName = "test-host"
+	cfg.HubEnabled = true
+	cfg.HubEndpoint = "http://localhost:8080"
+	cfg.HeartbeatEnabled = true
+	cfg.ControlChannelEnabled = false
+
+	mgr := &mockManager{}
+	rt := &runtime.MockRuntime{}
+	srv := New(cfg, mgr, rt)
+
+	conn, err := srv.createHubConnection("hub-prod", remoteCreds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Explicitly NOT setting IsColocated — default is false
+
+	srv.hubMu.Lock()
+	srv.hubConnections["hub-prod"] = conn
+	srv.hubMu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := conn.Start(ctx, srv); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+
+	if conn.Heartbeat == nil {
+		t.Error("expected remote connection to have heartbeat service")
+	}
+}
+
+func TestColocated_ComboMode_HeartbeatPerConnection(t *testing.T) {
+	// In combo mode (co-located local + remote), verify that only the remote
+	// connection gets heartbeat while local is skipped.
+	tmpDir := t.TempDir()
+	credDir := filepath.Join(tmpDir, "hub-credentials")
+	if err := os.MkdirAll(credDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write a remote credential file
+	remoteCreds := makeTestCreds("hub-prod", "broker-1", "https://hub.prod.example.com")
+	remoteData, _ := json.MarshalIndent(remoteCreds, "", "  ")
+	if err := os.WriteFile(filepath.Join(credDir, "hub-prod.json"), remoteData, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create server with in-memory local creds
+	localCreds := makeTestCreds("local", "broker-1", "http://localhost:8080")
+	cfg := DefaultServerConfig()
+	cfg.BrokerID = "broker-1"
+	cfg.BrokerName = "test-host"
+	cfg.HubEnabled = true
+	cfg.HubEndpoint = "http://localhost:8080"
+	cfg.InMemoryCredentials = localCreds
+	cfg.HeartbeatEnabled = true
+	cfg.ControlChannelEnabled = false
+
+	mgr := &mockManager{}
+	rt := &runtime.MockRuntime{}
+	srv := New(cfg, mgr, rt)
+
+	// Add remote connection from multi-store
+	srv.multiCredStore = brokercredentials.NewMultiStore(credDir)
+	multiCreds, _ := srv.multiCredStore.List()
+	for i := range multiCreds {
+		c := &multiCreds[i]
+		if _, exists := srv.hubConnections[c.Name]; exists {
+			continue
+		}
+		conn, err := srv.createHubConnection(c.Name, c)
+		if err != nil {
+			t.Fatalf("Failed to create connection %q: %v", c.Name, err)
+		}
+		srv.hubMu.Lock()
+		srv.hubConnections[c.Name] = conn
+		srv.hubMu.Unlock()
+	}
+
+	// Start all connections
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	srv.hubMu.RLock()
+	for _, conn := range srv.hubConnections {
+		if err := conn.Start(ctx, srv); err != nil {
+			t.Fatalf("Start failed for %s: %v", conn.Name, err)
+		}
+	}
+	srv.hubMu.RUnlock()
+
+	// Verify: local has no heartbeat, remote does
+	srv.hubMu.RLock()
+	localConn := srv.hubConnections["local"]
+	remoteConn := srv.hubConnections["hub-prod"]
+	srv.hubMu.RUnlock()
+
+	if localConn == nil || remoteConn == nil {
+		t.Fatal("expected both 'local' and 'hub-prod' connections to exist")
+	}
+
+	if !localConn.IsColocated {
+		t.Error("expected 'local' to be co-located")
+	}
+
+	if localConn.Heartbeat != nil {
+		t.Error("expected co-located 'local' connection to NOT have heartbeat")
+	}
+
+	if remoteConn.IsColocated {
+		t.Error("expected 'hub-prod' to NOT be co-located")
+	}
+
+	if remoteConn.Heartbeat == nil {
+		t.Error("expected remote 'hub-prod' connection to have heartbeat")
+	}
+}
+
+func TestColocated_CredentialWatcher_PreservesLocalConnection(t *testing.T) {
+	// When credentials are reloaded, the "local" connection from InMemoryCredentials
+	// must be preserved even if it's not in the multi-store.
+	tmpDir := t.TempDir()
+	credDir := filepath.Join(tmpDir, "hub-credentials")
+	if err := os.MkdirAll(credDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write one remote credential
+	remoteCreds := makeTestCreds("hub-prod", "broker-1", "https://hub.prod.example.com")
+	remoteData, _ := json.MarshalIndent(remoteCreds, "", "  ")
+	if err := os.WriteFile(filepath.Join(credDir, "hub-prod.json"), remoteData, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create server with in-memory local creds
+	localCreds := makeTestCreds("local", "broker-1", "http://localhost:8080")
+	cfg := DefaultServerConfig()
+	cfg.BrokerID = "broker-1"
+	cfg.BrokerName = "test-host"
+	cfg.HubEnabled = true
+	cfg.HubEndpoint = "http://localhost:8080"
+	cfg.InMemoryCredentials = localCreds
+
+	mgr := &mockManager{}
+	rt := &runtime.MockRuntime{}
+	srv := New(cfg, mgr, rt)
+
+	// Manually set up multi-store and add remote
+	srv.multiCredStore = brokercredentials.NewMultiStore(credDir)
+	multiCreds, _ := srv.multiCredStore.List()
+	for i := range multiCreds {
+		c := &multiCreds[i]
+		if _, exists := srv.hubConnections[c.Name]; exists {
+			continue
+		}
+		conn, err := srv.createHubConnection(c.Name, c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		srv.hubMu.Lock()
+		srv.hubConnections[c.Name] = conn
+		srv.hubMu.Unlock()
+	}
+
+	srv.hubMu.RLock()
+	if len(srv.hubConnections) != 2 {
+		t.Fatalf("expected 2 connections, got %d", len(srv.hubConnections))
+	}
+	srv.hubMu.RUnlock()
+
+	// Remove the remote credential file
+	if err := os.Remove(filepath.Join(credDir, "hub-prod.json")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Trigger credential reload
+	ctx := context.Background()
+	if err := srv.checkAndReloadCredentials(ctx); err != nil {
+		t.Fatalf("checkAndReloadCredentials failed: %v", err)
+	}
+
+	// Verify: local preserved, remote removed
+	srv.hubMu.RLock()
+	localConn, localExists := srv.hubConnections["local"]
+	_, remoteExists := srv.hubConnections["hub-prod"]
+	count := len(srv.hubConnections)
+	srv.hubMu.RUnlock()
+
+	if !localExists {
+		t.Error("expected 'local' connection to be preserved after reload")
+	}
+
+	if remoteExists {
+		t.Error("expected 'hub-prod' connection to be removed after credential deletion")
+	}
+
+	if count != 1 {
+		t.Errorf("expected 1 connection after reload, got %d", count)
+	}
+
+	if localConn != nil && !localConn.IsColocated {
+		t.Error("expected preserved 'local' connection to still be co-located")
+	}
+}
+
+func TestColocated_CredentialWatcher_AddRemoteAlongsideLocal(t *testing.T) {
+	// Start with only the local co-located connection, then add a remote one
+	// via credential watcher.
+	tmpDir := t.TempDir()
+	credDir := filepath.Join(tmpDir, "hub-credentials")
+	if err := os.MkdirAll(credDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create server with in-memory local creds only
+	localCreds := makeTestCreds("local", "broker-1", "http://localhost:8080")
+	cfg := DefaultServerConfig()
+	cfg.BrokerID = "broker-1"
+	cfg.BrokerName = "test-host"
+	cfg.HubEnabled = true
+	cfg.HubEndpoint = "http://localhost:8080"
+	cfg.InMemoryCredentials = localCreds
+
+	mgr := &mockManager{}
+	rt := &runtime.MockRuntime{}
+	srv := New(cfg, mgr, rt)
+
+	srv.multiCredStore = brokercredentials.NewMultiStore(credDir)
+
+	srv.hubMu.RLock()
+	if len(srv.hubConnections) != 1 {
+		t.Fatalf("expected 1 initial connection (local), got %d", len(srv.hubConnections))
+	}
+	srv.hubMu.RUnlock()
+
+	// Add a remote credential file
+	remoteCreds := makeTestCreds("hub-staging", "broker-1", "https://hub.staging.example.com")
+	remoteData, _ := json.MarshalIndent(remoteCreds, "", "  ")
+	if err := os.WriteFile(filepath.Join(credDir, "hub-staging.json"), remoteData, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Trigger credential reload
+	ctx := context.Background()
+	if err := srv.checkAndReloadCredentials(ctx); err != nil {
+		t.Fatalf("checkAndReloadCredentials failed: %v", err)
+	}
+
+	// Verify: local preserved, remote added
+	srv.hubMu.RLock()
+	_, localExists := srv.hubConnections["local"]
+	remoteConn, remoteExists := srv.hubConnections["hub-staging"]
+	count := len(srv.hubConnections)
+	srv.hubMu.RUnlock()
+
+	if !localExists {
+		t.Error("expected 'local' connection to be preserved")
+	}
+
+	if !remoteExists {
+		t.Error("expected 'hub-staging' connection to be added")
+	}
+
+	if count != 2 {
+		t.Errorf("expected 2 connections, got %d", count)
+	}
+
+	// Verify the newly added connection is NOT co-located
+	if remoteConn != nil && remoteConn.IsColocated {
+		t.Error("expected 'hub-staging' to NOT be co-located")
+	}
+}
+
+func TestColocated_GlobalGroveRejection_ComboMode(t *testing.T) {
+	// In combo mode with local + remote, multi-hub mode should reject global grove.
+	localCreds := makeTestCreds("local", "broker-1", "http://localhost:8080")
+	srv := newTestServerWithInMemoryCreds(localCreds)
+
+	// Add a remote connection to trigger multi-hub mode
+	remoteCreds := makeTestCreds("hub-prod", "broker-1", "https://hub.prod.example.com")
+	conn, err := srv.createHubConnection("hub-prod", remoteCreds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.hubMu.Lock()
+	srv.hubConnections["hub-prod"] = conn
+	srv.hubMu.Unlock()
+
+	if !srv.isMultiHubMode() {
+		t.Fatal("expected multi-hub mode with local + remote")
+	}
+
+	// Try to create a global grove agent
+	body := `{"name": "global-agent", "config": {"template": "claude"}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Errorf("expected status %d for global grove in combo multi-hub mode, got %d: %s",
+			http.StatusConflict, w.Code, w.Body.String())
+	}
+}
+
+func TestColocated_MultipleRemoteConnections(t *testing.T) {
+	// Test co-located mode with multiple remote connections alongside the local.
+	tmpDir := t.TempDir()
+	credDir := filepath.Join(tmpDir, "hub-credentials")
+	if err := os.MkdirAll(credDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write two remote credential files
+	for _, name := range []string{"hub-prod", "hub-staging"} {
+		creds := makeTestCreds(name, "broker-1", "https://"+name+".example.com")
+		data, _ := json.MarshalIndent(creds, "", "  ")
+		if err := os.WriteFile(filepath.Join(credDir, name+".json"), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Create server with local + multi-store
+	localCreds := makeTestCreds("local", "broker-1", "http://localhost:8080")
+	cfg := DefaultServerConfig()
+	cfg.BrokerID = "broker-1"
+	cfg.BrokerName = "test-host"
+	cfg.HubEnabled = true
+	cfg.HubEndpoint = "http://localhost:8080"
+	cfg.InMemoryCredentials = localCreds
+
+	mgr := &mockManager{}
+	rt := &runtime.MockRuntime{}
+	srv := New(cfg, mgr, rt)
+
+	srv.multiCredStore = brokercredentials.NewMultiStore(credDir)
+	multiCreds, _ := srv.multiCredStore.List()
+	for i := range multiCreds {
+		c := &multiCreds[i]
+		if _, exists := srv.hubConnections[c.Name]; exists {
+			continue
+		}
+		conn, err := srv.createHubConnection(c.Name, c)
+		if err != nil {
+			t.Fatalf("Failed to create connection %q: %v", c.Name, err)
+		}
+		srv.hubMu.Lock()
+		srv.hubConnections[c.Name] = conn
+		srv.hubMu.Unlock()
+	}
+
+	srv.hubMu.RLock()
+	count := len(srv.hubConnections)
+	srv.hubMu.RUnlock()
+
+	if count != 3 {
+		t.Fatalf("expected 3 hub connections (local + 2 remote), got %d", count)
+	}
+
+	// Verify co-located flags
+	srv.hubMu.RLock()
+	for name, conn := range srv.hubConnections {
+		if name == "local" {
+			if !conn.IsColocated {
+				t.Errorf("expected 'local' to be co-located")
+			}
+		} else {
+			if conn.IsColocated {
+				t.Errorf("expected %q to NOT be co-located", name)
+			}
+		}
+	}
+	srv.hubMu.RUnlock()
+
+	// Must be in multi-hub mode
+	if !srv.isMultiHubMode() {
+		t.Error("expected multi-hub mode with 3 connections")
+	}
+}
+
+func TestLogHubConnections_NoConnections(t *testing.T) {
+	// Verify logHubConnections doesn't panic with no connections
+	srv := newTestServer()
+	srv.logHubConnections() // should not panic
+}
+
+func TestLogHubConnections_WithConnections(t *testing.T) {
+	// Verify logHubConnections doesn't panic with connections
+	creds := makeTestCreds("local", "broker-1", "http://localhost:8080")
+	srv := newTestServerWithInMemoryCreds(creds)
+	srv.logHubConnections() // should not panic
+}
+
 func TestControlChannel_ConnectionNameHeader(t *testing.T) {
 	// Verify that NewControlChannelClient stores the connectionName
 	config := ControlChannelConfig{

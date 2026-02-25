@@ -697,6 +697,16 @@ func GetAgent(ctx context.Context, agentName string, templateName string, agentI
 		defaultTemplate = vs.DefaultTemplate
 	}
 
+	// Check for stale/incomplete agent directory (dir exists but no config file).
+	// This can happen when a previous provisioning attempt created the directory
+	// but failed before writing scion-agent.json. Remove it so we re-provision.
+	if _, err := os.Stat(agentDir); err == nil {
+		if configPath := config.GetScionAgentConfigPath(agentDir); configPath == "" {
+			util.Debugf("GetAgent: agent dir exists but no config file found, removing stale directory")
+			os.RemoveAll(agentDir)
+		}
+	}
+
 	if _, err := os.Stat(agentDir); os.IsNotExist(err) {
 		if templateName == "" {
 			templateName = defaultTemplate

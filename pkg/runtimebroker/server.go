@@ -35,6 +35,7 @@ import (
 	"github.com/ptone/scion-agent/pkg/config"
 	"github.com/ptone/scion-agent/pkg/hubclient"
 	"github.com/ptone/scion-agent/pkg/runtime"
+	"github.com/ptone/scion-agent/pkg/util"
 	"github.com/ptone/scion-agent/pkg/templatecache"
 	"github.com/ptone/scion-agent/pkg/util/logging"
 )
@@ -178,6 +179,13 @@ type pendingAgentState struct {
 
 // New creates a new Runtime Broker API server.
 func New(cfg ServerConfig, mgr agent.Manager, rt runtime.Runtime) *Server {
+	// Enable util debug logging when broker debug mode is on,
+	// so that debug messages from pkg/agent (which use util.Debugf)
+	// are visible in the broker's logs.
+	if cfg.Debug {
+		util.EnableDebug()
+	}
+
 	srv := &Server{
 		config:         cfg,
 		manager:        mgr,

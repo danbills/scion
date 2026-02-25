@@ -136,6 +136,22 @@ func (m *AgentManager) Start(ctx context.Context, opts api.StartOptions) (*api.A
 		harnessConfigName = harnessName
 	}
 
+	// Fall back to settings-based defaults (matches ProvisionAgent chain)
+	if harnessConfigName == "" && settings != nil {
+		effectiveProfile := opts.Profile
+		if effectiveProfile == "" {
+			effectiveProfile = settings.ActiveProfile
+		}
+		if effectiveProfile != "" {
+			if p, ok := settings.Profiles[effectiveProfile]; ok && p.DefaultHarnessConfig != "" {
+				harnessConfigName = p.DefaultHarnessConfig
+			}
+		}
+	}
+	if harnessConfigName == "" && settings != nil && settings.DefaultHarnessConfig != "" {
+		harnessConfigName = settings.DefaultHarnessConfig
+	}
+
 	// Default values
 	resolvedImage := ""
 	unixUsername := "root"

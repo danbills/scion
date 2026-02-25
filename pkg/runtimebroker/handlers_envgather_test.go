@@ -1083,3 +1083,95 @@ profiles:
 		t.Errorf("expected description='From profile' (profile wins), got %q", info.Description)
 	}
 }
+
+// TestEnvGather_FinalizeEnv_EmptyTemplate tests that finalize-env succeeds when
+// the create request has no template specified, verifying that harness-config
+// resolution falls back to settings defaults (default_harness_config) and
+// image resolution succeeds.
+func TestEnvGather_FinalizeEnv_EmptyTemplate(t *testing.T) {
+	groveDir := t.TempDir()
+
+	// Settings with default_harness_config that points to "claude"
+	settingsYAML := `
+schema_version: "1"
+default_harness_config: claude
+harness_configs:
+  claude:
+    harness: claude
+    env:
+      NEEDED_KEY: ""
+profiles:
+  default:
+    runtime: mock
+`
+	if err := os.WriteFile(filepath.Join(groveDir, "settings.yaml"), []byte(settingsYAML), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create "default" template WITHOUT harness_config so the fallback to
+	// settings.default_harness_config is exercised.
+	defaultTplDir := filepath.Join(groveDir, "templates", "default")
+	if err := os.MkdirAll(defaultTplDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(defaultTplDir, "scion-agent.yaml"), []byte("# no harness_config\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create "claude" harness-config directory with image
+	claudeHCDir := filepath.Join(groveDir, "harness-configs", "claude")
+	if err := os.MkdirAll(claudeHCDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(claudeHCDir, "config.yaml"), []byte("harness: claude\nimage: test-image:claude\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := DefaultServerConfig()
+	cfg.BrokerID = "test-broker-id"
+	cfg.BrokerName = "test-host"
+	cfg.Debug = true
+
+	mgr := &envCapturingManager{}
+	rt := &runtime.MockRuntime{}
+
+	srv := New(cfg, mgr, rt)
+
+	// Phase 1: Create agent with gatherEnv but NO template — should get 202
+	createBody := `{
+		"name": "test-agent-empty-tpl",
+		"id": "agent-uuid-empty-tpl",
+		"gatherEnv": true,
+		"grovePath": "` + groveDir + `",
+		"config": {"profile": "default"}
+	}`
+	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(createBody))
+	createReq.Header.Set("Content-Type", "application/json")
+	createW := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(createW, createReq)
+
+	if createW.Code != http.StatusAccepted {
+		t.Fatalf("phase 1: expected 202, got %d: %s", createW.Code, createW.Body.String())
+	}
+
+	// Phase 2: Submit gathered env via finalize-env
+	finalizeBody := `{"env": {"NEEDED_KEY": "gathered-value"}}`
+	finalizeReq := httptest.NewRequest(http.MethodPost, "/api/v1/agents/test-agent-empty-tpl/finalize-env", strings.NewReader(finalizeBody))
+	finalizeReq.Header.Set("Content-Type", "application/json")
+	finalizeW := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(finalizeW, finalizeReq)
+
+	if finalizeW.Code != http.StatusCreated {
+		t.Fatalf("phase 2: expected 201, got %d: %s", finalizeW.Code, finalizeW.Body.String())
+	}
+
+	// Verify agent was started with the gathered key
+	if mgr.lastEnv == nil {
+		t.Fatal("expected env to be set after finalize")
+	}
+	if mgr.lastEnv["NEEDED_KEY"] != "gathered-value" {
+		t.Errorf("expected NEEDED_KEY='gathered-value', got %q", mgr.lastEnv["NEEDED_KEY"])
+	}
+}

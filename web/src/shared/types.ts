@@ -94,6 +94,7 @@ export interface Agent {
   id: string;
   name: string;
   groveId: string;
+  grove?: string;
   template: string;
   status: AgentStatus;
   taskSummary?: string;

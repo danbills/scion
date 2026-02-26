@@ -118,10 +118,18 @@ export class ScionPageAgents extends LitElement {
       color: var(--scion-primary, #3b82f6);
     }
 
-    .agent-template {
-      font-size: 0.875rem;
+    .agent-meta {
+      font-size: 0.813rem;
       color: var(--scion-text-muted, #64748b);
       margin-top: 0.25rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.125rem;
+    }
+
+    .agent-meta-label {
+      color: var(--scion-text-muted, #64748b);
+      opacity: 0.7;
     }
 
     .agent-task {
@@ -423,7 +431,10 @@ export class ScionPageAgents extends LitElement {
                 ${agent.name}
               </a>
             </h3>
-            <div class="agent-template">${agent.template}</div>
+            <div class="agent-meta">
+              ${agent.grove ? html`<div><span class="agent-meta-label">grove:</span> ${agent.grove}</div>` : ''}
+              <div><span class="agent-meta-label">template:</span> ${agent.template}</div>
+            </div>
           </div>
           <scion-status-badge
             status=${this.getStatusVariant(agent.status)}

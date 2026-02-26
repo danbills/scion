@@ -256,6 +256,13 @@ function renderRoute(path: string): void {
   // Clear previous content
   appContainer.innerHTML = '';
 
+  // Build page data with current user context for page components
+  const pageData: PageData = {
+    path,
+    title: 'Scion',
+    user: currentUser || undefined,
+  };
+
   if (STANDALONE_ROUTES.has(tag)) {
     // Standalone pages render without the app shell
     const page = document.createElement(tag);
@@ -268,7 +275,8 @@ function renderRoute(path: string): void {
     };
     shell.currentPath = path;
     shell.user = currentUser;
-    const page = document.createElement(tag);
+    const page = document.createElement(tag) as HTMLElement & { pageData: PageData };
+    page.pageData = pageData;
     shell.appendChild(page);
     appContainer.appendChild(shell);
   } else {
@@ -279,7 +287,8 @@ function renderRoute(path: string): void {
     };
     shell.currentPath = path;
     shell.user = currentUser;
-    const page = document.createElement(tag);
+    const page = document.createElement(tag) as HTMLElement & { pageData: PageData };
+    page.pageData = pageData;
     shell.appendChild(page);
     appContainer.appendChild(shell);
   }

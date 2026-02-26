@@ -333,11 +333,27 @@ export class ScionPageAgentCreate extends LitElement {
         throw new Error(msg);
       }
 
-      const result = (await response.json()) as { agent?: { id: string }; id?: string };
-      const agentId = result.agent?.id || result.id;
+      const result = (await response.json()) as {
+        agent?: { id: string; status?: string };
+        id?: string;
+      };
+      const agent = result.agent;
+      const agentId = agent?.id || result.id;
 
       if (!agentId) {
         throw new Error('No agent ID in response');
+      }
+
+      // If the backend didn't already start the agent, explicitly start it.
+      const startedStatuses = ['running', 'provisioning', 'busy', 'idle', 'cloning'];
+      if (!agent?.status || !startedStatuses.includes(agent.status)) {
+        const startResp = await fetch(`/api/v1/agents/${agentId}/start`, {
+          method: 'POST',
+          credentials: 'include',
+        });
+        if (!startResp.ok) {
+          console.warn('Agent created but failed to start:', startResp.status);
+        }
       }
 
       // Navigate to agent detail page

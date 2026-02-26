@@ -398,7 +398,7 @@ export class ScionLoginPage extends LitElement {
   private getErrorMessage(): string {
     const messages: Record<string, string> = {
       session_error:
-        'Your session could not be saved. This is usually caused by a stale browser cookie.',
+        'Your session could not be saved. Please contact an administrator if this persists.',
       state_mismatch:
         'Login verification failed. Please try signing in again.',
       exchange_failed:

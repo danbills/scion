@@ -874,10 +874,20 @@ func runServerStart(cmd *cobra.Command, args []string) error {
 			}
 
 			// Register global grove and runtime broker record first (required for FK constraint)
-			if err := registerGlobalGroveAndBroker(ctx, s, brokerID, brokerName, rhEndpoint, rt, serverAutoProvide, brokerSettings); err != nil {
-				log.Printf("Warning: failed to register global grove: %v", err)
+			effectiveID, regErr := registerGlobalGroveAndBroker(ctx, s, brokerID, brokerName, rhEndpoint, rt, serverAutoProvide, brokerSettings)
+			if regErr != nil {
+				log.Printf("Warning: failed to register global grove: %v", regErr)
 			} else {
 				colocatedBrokerRegistered = true
+				// If name-based dedup found an existing broker with a different ID,
+				// update brokerID and persist so future restarts use the correct ID.
+				if effectiveID != brokerID {
+					log.Printf("Broker ID updated from %s to %s (name-based dedup)", brokerID, effectiveID)
+					brokerID = effectiveID
+					if err := config.UpdateSetting(globalDir, "hub.brokerId", brokerID, true); err != nil {
+						log.Printf("Warning: failed to persist deduplicated broker ID: %v", err)
+					}
+				}
 				log.Printf("Registered global grove with runtime broker %s (endpoint: %s, autoProvide: %v)", brokerName, rhEndpoint, serverAutoProvide)
 			}
 
@@ -1018,11 +1028,13 @@ func runServerStart(cmd *cobra.Command, args []string) error {
 
 // registerGlobalGroveAndBroker creates the global grove and registers this
 // runtime broker as a provider. This enables automatic agent handoff.
-func registerGlobalGroveAndBroker(ctx context.Context, s store.Store, brokerID, brokerName, endpoint string, rt runtime.Runtime, autoProvide bool, settings *config.Settings) error {
+// Returns the effective broker ID, which may differ from the input if an
+// existing broker was found by name (deduplication).
+func registerGlobalGroveAndBroker(ctx context.Context, s store.Store, brokerID, brokerName, endpoint string, rt runtime.Runtime, autoProvide bool, settings *config.Settings) (string, error) {
 	// Check if global grove already exists
 	globalGrove, err := s.GetGroveBySlug(ctx, GlobalGroveName)
 	if err != nil && err != store.ErrNotFound {
-		return fmt.Errorf("failed to check for global grove: %w", err)
+		return brokerID, fmt.Errorf("failed to check for global grove: %w", err)
 	}
 
 	// Create global grove if it doesn't exist (without DefaultRuntimeBrokerID yet)
@@ -1040,7 +1052,7 @@ func registerGlobalGroveAndBroker(ctx context.Context, s store.Store, brokerID, 
 		}
 
 		if err := s.CreateGrove(ctx, globalGrove); err != nil {
-			return fmt.Errorf("failed to create global grove: %w", err)
+			return brokerID, fmt.Errorf("failed to create global grove: %w", err)
 		}
 		groveNeedsDefaultBroker = true
 	} else if globalGrove.DefaultRuntimeBrokerID == "" {
@@ -1058,7 +1070,22 @@ func registerGlobalGroveAndBroker(ctx context.Context, s store.Store, brokerID, 
 
 	broker, err := s.GetRuntimeBroker(ctx, brokerID)
 	if err != nil && err != store.ErrNotFound {
-		return fmt.Errorf("failed to check for runtime broker: %w", err)
+		return brokerID, fmt.Errorf("failed to check for runtime broker: %w", err)
+	}
+
+	// If not found by ID, try to find an existing broker with the same name
+	// to prevent duplicate registrations when the broker ID changes (e.g.,
+	// settings file recreated, format migration, or database reset).
+	if broker == nil && brokerName != "" {
+		existingByName, nameErr := s.GetRuntimeBrokerByName(ctx, brokerName)
+		if nameErr != nil && nameErr != store.ErrNotFound {
+			return brokerID, fmt.Errorf("failed to check for runtime broker by name: %w", nameErr)
+		}
+		if existingByName != nil {
+			log.Printf("Found existing broker by name %q (ID: %s), reusing instead of creating duplicate", brokerName, existingByName.ID)
+			broker = existingByName
+			brokerID = existingByName.ID
+		}
 	}
 
 	if broker == nil {
@@ -1080,7 +1107,7 @@ func registerGlobalGroveAndBroker(ctx context.Context, s store.Store, brokerID, 
 		}
 
 		if err := s.CreateRuntimeBroker(ctx, broker); err != nil {
-			return fmt.Errorf("failed to create runtime broker: %w", err)
+			return brokerID, fmt.Errorf("failed to create runtime broker: %w", err)
 		}
 	} else {
 		// Update existing broker status, endpoint, auto-provide setting, and profiles
@@ -1092,7 +1119,7 @@ func registerGlobalGroveAndBroker(ctx context.Context, s store.Store, brokerID, 
 		// Update profiles from settings (may have changed)
 		broker.Profiles = profiles
 		if err := s.UpdateRuntimeBroker(ctx, broker); err != nil {
-			return fmt.Errorf("failed to update runtime broker: %w", err)
+			return brokerID, fmt.Errorf("failed to update runtime broker: %w", err)
 		}
 	}
 
@@ -1124,7 +1151,7 @@ func registerGlobalGroveAndBroker(ctx context.Context, s store.Store, brokerID, 
 	if err := s.AddGroveProvider(ctx, provider); err != nil {
 		// Ignore duplicate provider errors
 		if err != store.ErrAlreadyExists {
-			return fmt.Errorf("failed to add grove provider: %w", err)
+			return brokerID, fmt.Errorf("failed to add grove provider: %w", err)
 		}
 		// Update provider status
 		if err := s.UpdateProviderStatus(ctx, globalGrove.ID, brokerID, store.BrokerStatusOnline); err != nil {
@@ -1132,7 +1159,7 @@ func registerGlobalGroveAndBroker(ctx context.Context, s store.Store, brokerID, 
 		}
 	}
 
-	return nil
+	return brokerID, nil
 }
 
 // agentDispatcherAdapter adapts the agent.Manager to the hub.AgentDispatcher interface.

@@ -267,20 +267,25 @@ export class ScionPageAgents extends LitElement {
 
   private onAgentsUpdated(): void {
     const updatedAgents = stateManager.getAgents();
-    if (updatedAgents.length > 0) {
-      // Merge SSE agent deltas into local agent list
-      const agentMap = new Map(this.agents.map((a) => [a.id, a]));
-      for (const agent of updatedAgents) {
-        const existing = agentMap.get(agent.id);
-        const merged = { ...existing, ...agent } as Agent;
-        // Preserve _capabilities from existing state when the delta lacks them.
-        if (!agent._capabilities && existing?._capabilities) {
-          merged._capabilities = existing._capabilities;
-        }
-        agentMap.set(agent.id, merged);
+    // Merge SSE agent deltas into local agent list
+    const agentMap = new Map(this.agents.map((a) => [a.id, a]));
+    for (const agent of updatedAgents) {
+      const existing = agentMap.get(agent.id);
+      const merged = { ...existing, ...agent } as Agent;
+      // Preserve _capabilities from existing state when the delta lacks them.
+      if (!agent._capabilities && existing?._capabilities) {
+        merged._capabilities = existing._capabilities;
       }
-      this.agents = Array.from(agentMap.values());
+      agentMap.set(agent.id, merged);
     }
+    // Remove agents that were deleted (present locally but not in state)
+    const stateAgentIds = new Set(updatedAgents.map((a) => a.id));
+    for (const id of agentMap.keys()) {
+      if (!stateAgentIds.has(id) && stateManager.getAgent(id) === undefined) {
+        agentMap.delete(id);
+      }
+    }
+    this.agents = Array.from(agentMap.values());
   }
 
   private async loadAgents(): Promise<void> {

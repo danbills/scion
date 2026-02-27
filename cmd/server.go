@@ -892,6 +892,7 @@ func runServerStart(cmd *cobra.Command, args []string) error {
 					}
 				}
 				log.Printf("Registered global grove with runtime broker %s (endpoint: %s, autoProvide: %v)", brokerName, rhEndpoint, serverAutoProvide)
+				hubSrv.SetEmbeddedBrokerID(brokerID)
 			}
 
 			// Generate a 32-byte random secret key

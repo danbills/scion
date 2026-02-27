@@ -526,7 +526,7 @@ func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		if !hasLocalPath {
+		if !hasLocalPath && !s.isEmbeddedBroker(runtimeBrokerID) {
 			stor := s.GetStorage()
 			if stor == nil {
 				RuntimeError(w, "Storage not configured for workspace bootstrap")
@@ -576,7 +576,7 @@ func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		if !hasLocalPath {
+		if !hasLocalPath && !s.isEmbeddedBroker(runtimeBrokerID) {
 			stor := s.GetStorage()
 			if stor != nil {
 				storagePath := storage.GroveWorkspaceStoragePath(grove.ID)
@@ -1879,7 +1879,10 @@ func (s *Server) syncWorkspaceOnStop(ctx context.Context, agent *store.Agent) {
 		return // Not hub-native or grove not found
 	}
 
-	// Check if broker is remote (no local path)
+	// Check if broker is co-located (embedded or has local path)
+	if s.isEmbeddedBroker(agent.RuntimeBrokerID) {
+		return // Embedded broker, no sync needed
+	}
 	provider, err := s.store.GetGroveProvider(ctx, grove.ID, agent.RuntimeBrokerID)
 	if err == nil && provider.LocalPath != "" {
 		return // Colocated broker, no sync needed

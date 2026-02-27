@@ -35,9 +35,9 @@ func SyncToGCS(ctx context.Context, localPath, bucketName, prefix string) error 
 		return fmt.Errorf("failed to create source fs for %s: %w", localPath, err)
 	}
 
-	gcsPath := fmt.Sprintf(":gcs:%s", bucketName)
+	gcsPath := fmt.Sprintf(":gcs,bucket_policy_only=true:%s", bucketName)
 	if prefix != "" {
-		gcsPath = fmt.Sprintf(":gcs:%s/%s", bucketName, prefix)
+		gcsPath = fmt.Sprintf(":gcs,bucket_policy_only=true:%s/%s", bucketName, prefix)
 	}
 
 	dstFs, err := fs.NewFs(ctx, gcsPath)
@@ -58,9 +58,9 @@ func SyncToGCS(ctx context.Context, localPath, bucketName, prefix string) error 
 
 // SyncFromGCS downloads a GCS bucket prefix to a local directory.
 func SyncFromGCS(ctx context.Context, bucketName, prefix, localPath string) error {
-	gcsPath := fmt.Sprintf(":gcs:%s", bucketName)
+	gcsPath := fmt.Sprintf(":gcs,bucket_policy_only=true:%s", bucketName)
 	if prefix != "" {
-		gcsPath = fmt.Sprintf(":gcs:%s/%s", bucketName, prefix)
+		gcsPath = fmt.Sprintf(":gcs,bucket_policy_only=true:%s/%s", bucketName, prefix)
 	}
 
 	srcFs, err := fs.NewFs(ctx, gcsPath)

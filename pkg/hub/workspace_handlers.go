@@ -660,8 +660,11 @@ func (s *Server) syncHubNativeWorkspaceBack(ctx context.Context, agent *store.Ag
 		return
 	}
 
-	// Only needed for remote brokers (no local path)
+	// Only needed for remote brokers (no local path and not embedded)
 	if agent.RuntimeBrokerID != "" {
+		if s.isEmbeddedBroker(agent.RuntimeBrokerID) {
+			return // Embedded broker, no sync needed
+		}
 		provider, err := s.store.GetGroveProvider(ctx, grove.ID, agent.RuntimeBrokerID)
 		if err == nil && provider.LocalPath != "" {
 			return // Colocated broker, no sync needed

@@ -355,6 +355,7 @@ type Server struct {
 	events                    EventPublisher      // Event publisher for real-time SSE updates
 	notificationDispatcher    *NotificationDispatcher // Notification dispatcher for agent status events
 	maintenance               *MaintenanceState   // Runtime maintenance mode state
+	embeddedBrokerID          string              // Broker ID when running in hub+broker combo mode
 }
 
 // New creates a new Hub API server.
@@ -576,6 +577,23 @@ func (s *Server) GetDispatcher() AgentDispatcher {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.dispatcher
+}
+
+// SetEmbeddedBrokerID records the broker ID for a co-located runtime broker
+// running in the same process as the hub. This allows the hub to skip GCS
+// sync operations when the broker already has filesystem access.
+func (s *Server) SetEmbeddedBrokerID(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.embeddedBrokerID = id
+}
+
+// isEmbeddedBroker returns true if brokerID matches the co-located broker
+// running in the same process as the hub.
+func (s *Server) isEmbeddedBroker(brokerID string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.embeddedBrokerID != "" && s.embeddedBrokerID == brokerID
 }
 
 // SetStorage sets the storage backend for template files.

@@ -857,12 +857,12 @@ When the Hub moves to a multi-node deployment, the scheduler will need leader el
 4. ~~Migrate existing `startPurgeLoop` to a registered recurring handler.~~
 5. ~~Unit tests for scheduler lifecycle and handler invocation.~~
 
-### Phase 2: Agent Heartbeat Timeout
-6. Add `AgentStatusUndetermined` constant to `pkg/store/models.go`.
-7. Add `MarkStaleAgentsUndetermined` to `AgentStore` interface and SQLite implementation.
-8. Implement heartbeat timeout recurring handler (hardcoded 2-minute threshold).
-9. Wire handler registration into server setup (always registered, 1-minute interval).
-10. Tests for the heartbeat timeout query and handler.
+### Phase 2: Agent Heartbeat Timeout ✅
+6. ~~Add `AgentStatusUndetermined` constant to `pkg/store/models.go`.~~
+7. ~~Add `MarkStaleAgentsUndetermined` to `AgentStore` interface and SQLite implementation.~~
+8. ~~Implement heartbeat timeout recurring handler (hardcoded 2-minute threshold).~~
+9. ~~Wire handler registration into server setup (always registered, 1-minute interval).~~
+10. ~~Tests for the heartbeat timeout query and handler.~~
 
 ### Phase 3: One-Shot Timer Infrastructure
 11. Add `scheduled_events` table (new SQLite migration).

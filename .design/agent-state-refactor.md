@@ -175,7 +175,7 @@ The **activity** represents what the agent is doing while it's running. This is 
 - When phase transitions to `running`, activity defaults to `idle`
 - **Sticky activities** (`waiting_for_input`, `completed`, `limits_exceeded`) resist being overwritten by `idle` or other transient states. They are only cleared by "new work" events (`prompt-submit`, `agent-start`, `session-start`)
 - **`stalled`** is set by the platform when the sciontool heartbeat is still being received but no activity events have arrived within a configurable timeout. The agent process is alive but appears hung. Cleared by any activity event from the agent.
-- **`offline`** is set by the platform when neither activity events nor the sciontool heartbeat have been received. The agent may still be running on a disconnected broker, so it could be doing work — the platform is simply blind to its current activity. The UI should prominently display the `lastSeen` timestamp alongside the `offline` badge so users can gauge how long connectivity has been lost. Cleared by any event or heartbeat from the agent.
+- **`offline`** is set by the platform when neither activity events nor the sciontool heartbeat have been received. The agent may still be running on a disconnected broker, so it could be doing work — the platform is simply blind to its current activity. The UI should prominently display the existing `lastHeartbeat` timestamp alongside the `offline` badge so users can gauge how long connectivity has been lost. Cleared by any event or heartbeat from the agent.
 
 **Mapping from current implementation**:
 | Current (sciontool UPPERCASE) | New Activity |
@@ -492,7 +492,7 @@ Two platform-set activities are introduced for agents whose state cannot be dete
 
 An agent is `stalled` when the sciontool heartbeat is still being received (the process is alive) but no activity events have arrived within a configurable timeout. This typically means the agent process is hung or blocked.
 
-- **Detection**: A scheduled job checks `lastActivityEvent` for all agents with `phase = running`. If the timestamp exceeds the configured threshold (e.g., 5 minutes) and a recent heartbeat has been received, and `activity` is not a terminal sticky state (`completed`, `limits_exceeded`), the scheduler sets `activity = stalled`.
+- **Detection**: A scheduled job checks `lastActivityEvent` for all agents with `phase = running`. If the timestamp exceeds the configured threshold (default: 5 minutes, configurable as a global Hub server setting) and a recent heartbeat has been received, and `activity` is not a terminal sticky state (`completed`, `limits_exceeded`), the scheduler sets `activity = stalled`.
 - **Recovery**: Any activity event from the agent clears `stalled` and sets the appropriate activity.
 - **Notification**: `stalled` is a notification trigger, enabling users to investigate hung agents.
 
@@ -502,9 +502,10 @@ An agent is `offline` when neither activity events nor the sciontool heartbeat h
 
 - **Detection**: A scheduled job checks `lastHeartbeat` for all agents with `phase = running`. If the timestamp exceeds the heartbeat timeout threshold and `activity` is not a terminal sticky state, the scheduler sets `activity = offline`.
 - **Refinement**: The system may additionally check broker connectivity status. If the broker itself is unreachable, this strengthens the `offline` classification. If the broker is connected but the agent has no heartbeat, this may indicate the agent process crashed — but the system does **not** auto-escalate to `phase = error` to avoid false positives (see Resolved Design Decisions). This is noted as a potential future improvement once heartbeat reliability is proven.
-- **Recovery**: Any event or heartbeat from the agent clears `offline` and restores the appropriate activity.
+- **Recovery**: Any event or heartbeat from the agent clears `offline` and restores the appropriate activity. Notably, any non-heartbeat event (activity update, tool event, etc.) also clears `offline` immediately — if the platform received a real event from the agent, it is clearly not offline regardless of heartbeat state.
+- **Flapping**: No hysteresis is applied to heartbeat-based transitions. Intermittent heartbeats (e.g., network flapping) may cause rapid transitions between `stalled` and `offline`. This is acceptable for now; hysteresis-based debouncing is a potential future improvement if flapping proves disruptive in practice.
 - **Notification**: `offline` is a notification trigger, enabling users to investigate connectivity issues.
-- **UI**: The `offline` badge should prominently display the `lastSeen` timestamp (e.g., "Offline — last seen 12 minutes ago") so users can assess severity and decide whether to investigate.
+- **UI**: The `offline` badge should prominently display the existing `lastHeartbeat` timestamp (e.g., "Offline — last seen 12 minutes ago") so users can assess severity and decide whether to investigate. No new API field is needed — the existing heartbeat timestamp already serves this purpose.
 
 This replaces the previously discussed but unimplemented "stale/stalled detection" from the notifications design.
 
@@ -587,7 +588,7 @@ This avoids the technical debt of maintaining a legacy computed field indefinite
 
 4. **Soft-delete is not a phase.** `deleted` and `restored` are not lifecycle states. Soft-delete uses a `deletedAt` timestamp. Restoring an agent clears the soft-delete flag and returns the agent to its prior phase (typically `stopped`). The `restored` value is removed entirely — it was always just the act of returning to a normal state.
 
-5. **`offline` (not `undetermined`) for missing heartbeat/events.** The activity is named `offline` because it's the most intuitive term for users. While the agent *could* still be running on a disconnected broker, `offline` clearly signals "we can't see it" — the `lastSeen` timestamp displayed alongside in the UI gives users the context to judge severity. Alternatives considered: `undetermined` (too vague to act on), `unreachable` (implies a network problem specifically).
+5. **`offline` (not `undetermined`) for missing heartbeat/events.** The activity is named `offline` because it's the most intuitive term for users. While the agent *could* still be running on a disconnected broker, `offline` clearly signals "we can't see it" — the existing `lastHeartbeat` timestamp displayed alongside in the UI gives users the context to judge severity. Alternatives considered: `undetermined` (too vague to act on), `unreachable` (implies a network problem specifically).
 
 6. **No auto-escalation from `offline` to `error`.** Even when a broker is confirmed connected but an agent on it has no heartbeat, the system does not automatically set `phase = error`. Auto-escalation risks false positives if the heartbeat mechanism itself has issues. This is noted as a potential future improvement once heartbeat reliability is proven across deployments and edge cases are better understood.
 
@@ -595,12 +596,10 @@ This avoids the technical debt of maintaining a legacy computed field indefinite
 
 8. **Claude Code `thinking` inference is acceptable.** Since Claude Code doesn't emit `model-start`/`model-end` events, `thinking` is inferred from the absence of tool execution during an active agent turn. This is reliable enough for now. If Claude Code adds native model lifecycle events in the future, the inference logic can be simplified to use them directly.
 
-## Open Questions
+9. **`lastSeen` uses the existing heartbeat timestamp.** The existing `lastHeartbeat` timestamp already recorded in the agent state serves as the `lastSeen` value. No new API field is needed — the current UI already displays a valid "last seen" indicator from this data. The `offline` badge simply renders the existing timestamp more prominently.
 
-1. **`lastSeen` in the API response**: The `offline` activity needs a `lastSeen` timestamp displayed in the UI. Should `lastSeen` be a top-level field on the Agent API response (always populated from the most recent heartbeat or event timestamp), or should it only be included in the `detail` object when `activity = offline`? A top-level field is more generally useful (e.g., for sorting agents by recency) but adds a field to every response. A detail-only field keeps the API surface smaller but limits its utility.
+10. **`stalled` threshold is a global server config setting.** The stalled detection threshold is a global Hub server configuration value (not per-grove or per-agent), with a default of 5 minutes. This keeps configuration simple and consistent. If per-agent tuning proves necessary in the future, it can be added as an override.
 
-2. **`stalled` threshold configurability**: The stalled detection threshold (e.g., 5 minutes of no activity events despite heartbeat) needs to be configurable. Should this be a global Hub setting, a per-grove setting, or a per-agent setting? Global is simplest but may not suit all workloads — some agents legitimately go quiet for extended periods (e.g., waiting for long-running builds). Per-agent is most flexible but adds UX complexity.
+11. **Heartbeat flapping is allowed; any agent event clears `offline`.** No hysteresis is applied to heartbeat-based state transitions — the system allows rapid flapping between `stalled` and `offline` if heartbeats arrive intermittently. This is acceptable for now. Importantly, any non-heartbeat event from an agent (activity update, tool event, etc.) clears `offline` status immediately, even if heartbeats are still missing. The reasoning: if we received an event from the agent, it is clearly not offline regardless of heartbeat state. Implementation should include code comments noting that hysteresis-based debouncing is a potential future improvement if flapping proves disruptive in practice.
 
-3. **`offline` vs `stalled` when heartbeat is ambiguous**: There may be edge cases where heartbeats arrive intermittently (e.g., network flapping). The current model draws a clean line — heartbeat present = `stalled`, heartbeat absent = `offline` — but intermittent heartbeats could cause rapid flapping between the two. Should there be hysteresis (e.g., require N consecutive missed heartbeats before transitioning to `offline`), and if so, where does that logic live?
-
-4. **Scheduler dependency for detection**: If the scheduler is down or delayed, stalled/offline detection stops working silently. Should there be a fallback mechanism (e.g., lightweight in-process timer that runs only when the scheduler is unhealthy), or is scheduler reliability sufficient to not warrant redundancy? This also affects how detection job failures are surfaced — should a failed detection run itself trigger an alert?
+12. **No fallback for scheduler-based detection.** Stalled/offline detection relies exclusively on the scheduler system. No in-process fallback timer is implemented. The scheduler will have its own internal health check as part of the overall Hub health status. Chaining separate health-check mechanisms adds complexity without proportional benefit at this stage.

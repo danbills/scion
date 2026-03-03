@@ -365,6 +365,14 @@ type Server struct {
 	embeddedBrokerID          string              // Broker ID when running in hub+broker combo mode
 	scheduler                 *Scheduler          // Unified scheduler for recurring tasks
 	cleanupOnce               sync.Once           // Ensures CleanupResources runs only once
+
+	// Subsystem loggers for handler methods
+	agentLifecycleLog *slog.Logger
+	messageLog        *slog.Logger
+	authLog           *slog.Logger
+	envSecretLog      *slog.Logger
+	templateLog       *slog.Logger
+	workspaceLog      *slog.Logger
 }
 
 // New creates a new Hub API server.
@@ -376,6 +384,14 @@ func New(cfg ServerConfig, s store.Store) *Server {
 		startTime:   time.Now(),
 		events:      noopEventPublisher{},
 		maintenance: NewMaintenanceState(cfg.AdminMode, cfg.MaintenanceMessage),
+
+		// Subsystem loggers
+		agentLifecycleLog: logging.Subsystem("hub.agent-lifecycle"),
+		messageLog:        logging.Subsystem("hub.messages"),
+		authLog:           logging.Subsystem("hub.auth"),
+		envSecretLog:      logging.Subsystem("hub.env-secrets"),
+		templateLog:       logging.Subsystem("hub.templates"),
+		workspaceLog:      logging.Subsystem("hub.workspace"),
 	}
 
 	ctx := context.Background()
@@ -490,6 +506,7 @@ func New(cfg ServerConfig, s store.Store) *Server {
 		APIKeySvc:      srv.apiKeyService,
 		TrustedProxies: cfg.TrustedProxies,
 		Debug:          cfg.Debug,
+		Logger:         srv.authLog,
 	}
 
 	srv.registerRoutes()
@@ -760,7 +777,7 @@ func (s *Server) CreateAuthenticatedDispatcher() *HTTPAgentDispatcher {
 		client = httpClient
 	}
 
-	dispatcher := NewHTTPAgentDispatcherWithClient(s.store, client, s.config.Debug)
+	dispatcher := NewHTTPAgentDispatcherWithClient(s.store, client, s.config.Debug, logging.Subsystem("hub.dispatcher"))
 
 	// Configure token generator if available
 	if s.agentTokenService != nil {

@@ -470,23 +470,26 @@ type HTTPAgentDispatcher struct {
 	hubEndpoint    string // Hub endpoint URL for agents to call back
 	devAuthToken   string // Dev auth token to inject into agent env (dev-auth mode only)
 	debug          bool
+	log            *slog.Logger
 }
 
 // NewHTTPAgentDispatcher creates a new HTTP-based agent dispatcher.
-func NewHTTPAgentDispatcher(s store.Store, debug bool) *HTTPAgentDispatcher {
+func NewHTTPAgentDispatcher(s store.Store, debug bool, log *slog.Logger) *HTTPAgentDispatcher {
 	return &HTTPAgentDispatcher{
 		store:  s,
 		client: NewHTTPRuntimeBrokerClientWithDebug(debug),
 		debug:  debug,
+		log:    log,
 	}
 }
 
 // NewHTTPAgentDispatcherWithClient creates a new HTTP-based agent dispatcher with a custom client.
-func NewHTTPAgentDispatcherWithClient(s store.Store, client RuntimeBrokerClient, debug bool) *HTTPAgentDispatcher {
+func NewHTTPAgentDispatcherWithClient(s store.Store, client RuntimeBrokerClient, debug bool, log *slog.Logger) *HTTPAgentDispatcher {
 	return &HTTPAgentDispatcher{
 		store:  s,
 		client: client,
 		debug:  debug,
+		log:    log,
 	}
 }
 
@@ -545,12 +548,12 @@ func (d *HTTPAgentDispatcher) buildCreateRequest(ctx context.Context, agent *sto
 				provider, provErr := d.store.GetGroveProvider(ctx, agent.GroveID, agent.RuntimeBrokerID)
 				if provErr != nil {
 					if d.debug {
-						slog.Warn("Failed to get grove provider for path lookup", "error", provErr)
+						d.log.Warn("Failed to get grove provider for path lookup", "error", provErr)
 					}
 				} else if provider.LocalPath != "" {
 					grovePath = provider.LocalPath
 					if d.debug {
-						slog.Debug("Found grove path for broker", "brokerID", agent.RuntimeBrokerID, "path", grovePath)
+						d.log.Debug("Found grove path for broker", "brokerID", agent.RuntimeBrokerID, "path", grovePath)
 					}
 				}
 			}
@@ -590,7 +593,7 @@ func (d *HTTPAgentDispatcher) buildCreateRequest(ctx context.Context, agent *sto
 	}
 
 	if d.debug {
-		slog.Debug(callerName,
+		d.log.Debug(callerName,
 			"agentName", agent.Name,
 			"hubEndpoint", d.hubEndpoint,
 			"hasTokenGenerator", d.tokenGenerator != nil,
@@ -609,17 +612,17 @@ func (d *HTTPAgentDispatcher) buildCreateRequest(ctx context.Context, agent *sto
 		token, err := d.tokenGenerator.GenerateAgentToken(agent.ID, agent.GroveID, additionalScopes...)
 		if err != nil {
 			if d.debug {
-				slog.Warn("Failed to generate agent token", "error", err)
+				d.log.Warn("Failed to generate agent token", "error", err)
 			}
 			// Continue without token - agent will operate in unauthenticated mode
 		} else {
 			req.AgentToken = token
 			if d.debug {
-				slog.Debug("Generated agent token", "length", len(token))
+				d.log.Debug("Generated agent token", "length", len(token))
 			}
 		}
 	} else if d.debug {
-		slog.Debug("No token generator configured - agent will not have Hub credentials")
+		d.log.Debug("No token generator configured - agent will not have Hub credentials")
 	}
 
 	// Add configuration if available
@@ -644,7 +647,7 @@ func (d *HTTPAgentDispatcher) buildCreateRequest(ctx context.Context, agent *sto
 		}
 		req.ResolvedEnv = agent.AppliedConfig.Env
 		if d.debug {
-			slog.Debug("buildCreateRequest: config sent to broker",
+			d.log.Debug("buildCreateRequest: config sent to broker",
 				"template", agent.Template,
 				"image", agent.AppliedConfig.Image,
 				"harnessConfig", agent.AppliedConfig.HarnessConfig,
@@ -660,7 +663,7 @@ func (d *HTTPAgentDispatcher) buildCreateRequest(ctx context.Context, agent *sto
 	envFromStorage, err := d.resolveEnvFromStorage(ctx, agent)
 	if err != nil {
 		if d.debug {
-			slog.Warn("buildCreateRequest: failed to resolve env from storage", "error", err)
+			d.log.Warn("buildCreateRequest: failed to resolve env from storage", "error", err)
 		}
 	} else if len(envFromStorage) > 0 {
 		if req.ResolvedEnv == nil {
@@ -693,13 +696,13 @@ func (d *HTTPAgentDispatcher) buildCreateRequest(ctx context.Context, agent *sto
 	resolvedSecrets, err := d.resolveSecrets(ctx, agent)
 	if err != nil {
 		if d.debug {
-			slog.Warn("Failed to resolve secrets", "error", err)
+			d.log.Warn("Failed to resolve secrets", "error", err)
 		}
 		// Continue without secrets rather than failing agent creation
 	} else if len(resolvedSecrets) > 0 {
 		req.ResolvedSecrets = resolvedSecrets
 		if d.debug {
-			slog.Debug("Resolved secrets for agent", "count", len(resolvedSecrets))
+			d.log.Debug("Resolved secrets for agent", "count", len(resolvedSecrets))
 		}
 	}
 
@@ -709,7 +712,7 @@ func (d *HTTPAgentDispatcher) buildCreateRequest(ctx context.Context, agent *sto
 		if agent.AppliedConfig != nil {
 			configEnvCount = len(agent.AppliedConfig.Env)
 		}
-		slog.Debug("buildCreateRequest: env resolution summary",
+		d.log.Debug("buildCreateRequest: env resolution summary",
 			"configEnvCount", configEnvCount,
 			"storageEnvCount", len(envFromStorage),
 			"resolvedSecretsCount", len(resolvedSecrets),
@@ -732,7 +735,7 @@ func (d *HTTPAgentDispatcher) buildCreateRequest(ctx context.Context, agent *sto
 func (d *HTTPAgentDispatcher) applyBrokerResponse(agent *store.Agent, resp *RemoteAgentResponse) {
 	if resp.Agent != nil {
 		if d.debug {
-			slog.Debug("applyBrokerResponse: applying broker phase",
+			d.log.Debug("applyBrokerResponse: applying broker phase",
 				"agentName", agent.Name,
 				"previousPhase", agent.Phase,
 				"brokerPhase", resp.Agent.Phase,
@@ -761,7 +764,7 @@ func (d *HTTPAgentDispatcher) applyBrokerResponse(agent *store.Agent, resp *Remo
 			agent.Runtime = resp.Agent.Runtime
 		}
 	} else if d.debug {
-		slog.Debug("applyBrokerResponse: broker response has nil Agent",
+		d.log.Debug("applyBrokerResponse: broker response has nil Agent",
 			"agentName", agent.Name,
 		)
 	}
@@ -887,7 +890,7 @@ func (d *HTTPAgentDispatcher) resolveEnvFromStorage(ctx context.Context, agent *
 		vars, err := d.store.ListEnvVars(ctx, store.EnvVarFilter{Scope: "grove", ScopeID: agent.GroveID})
 		if err != nil {
 			if d.debug {
-				slog.Warn("Failed to list grove env vars", "error", err)
+				d.log.Warn("Failed to list grove env vars", "error", err)
 			}
 		} else {
 			if d.debug {
@@ -895,14 +898,14 @@ func (d *HTTPAgentDispatcher) resolveEnvFromStorage(ctx context.Context, agent *
 				for _, v := range vars {
 					keys = append(keys, v.Key)
 				}
-				slog.Debug("resolveEnvFromStorage: grove scope", "groveID", agent.GroveID, "count", len(vars), "keys", keys)
+				d.log.Debug("resolveEnvFromStorage: grove scope", "groveID", agent.GroveID, "count", len(vars), "keys", keys)
 			}
 			for _, v := range vars {
 				result[v.Key] = v.Value
 			}
 		}
 	} else if d.debug {
-		slog.Debug("resolveEnvFromStorage: skipping grove scope (empty groveID)")
+		d.log.Debug("resolveEnvFromStorage: skipping grove scope (empty groveID)")
 	}
 
 	// Query user-scoped env vars (higher precedence)
@@ -910,7 +913,7 @@ func (d *HTTPAgentDispatcher) resolveEnvFromStorage(ctx context.Context, agent *
 		vars, err := d.store.ListEnvVars(ctx, store.EnvVarFilter{Scope: "user", ScopeID: agent.OwnerID})
 		if err != nil {
 			if d.debug {
-				slog.Warn("Failed to list user env vars", "error", err)
+				d.log.Warn("Failed to list user env vars", "error", err)
 			}
 		} else {
 			if d.debug {
@@ -918,14 +921,14 @@ func (d *HTTPAgentDispatcher) resolveEnvFromStorage(ctx context.Context, agent *
 				for _, v := range vars {
 					keys = append(keys, v.Key)
 				}
-				slog.Debug("resolveEnvFromStorage: user scope", "ownerID", agent.OwnerID, "count", len(vars), "keys", keys)
+				d.log.Debug("resolveEnvFromStorage: user scope", "ownerID", agent.OwnerID, "count", len(vars), "keys", keys)
 			}
 			for _, v := range vars {
 				result[v.Key] = v.Value
 			}
 		}
 	} else if d.debug {
-		slog.Debug("resolveEnvFromStorage: skipping user scope (empty ownerID)")
+		d.log.Debug("resolveEnvFromStorage: skipping user scope (empty ownerID)")
 	}
 
 	// Query runtime_broker-scoped env vars (if applicable)
@@ -933,7 +936,7 @@ func (d *HTTPAgentDispatcher) resolveEnvFromStorage(ctx context.Context, agent *
 		vars, err := d.store.ListEnvVars(ctx, store.EnvVarFilter{Scope: "runtime_broker", ScopeID: agent.RuntimeBrokerID})
 		if err != nil {
 			if d.debug {
-				slog.Warn("Failed to list broker env vars", "error", err)
+				d.log.Warn("Failed to list broker env vars", "error", err)
 			}
 		} else {
 			if d.debug {
@@ -941,14 +944,14 @@ func (d *HTTPAgentDispatcher) resolveEnvFromStorage(ctx context.Context, agent *
 				for _, v := range vars {
 					keys = append(keys, v.Key)
 				}
-				slog.Debug("resolveEnvFromStorage: broker scope", "brokerID", agent.RuntimeBrokerID, "count", len(vars), "keys", keys)
+				d.log.Debug("resolveEnvFromStorage: broker scope", "brokerID", agent.RuntimeBrokerID, "count", len(vars), "keys", keys)
 			}
 			for _, v := range vars {
 				result[v.Key] = v.Value
 			}
 		}
 	} else if d.debug {
-		slog.Debug("resolveEnvFromStorage: skipping broker scope (empty brokerID)")
+		d.log.Debug("resolveEnvFromStorage: skipping broker scope (empty brokerID)")
 	}
 
 	return result, nil
@@ -1025,12 +1028,12 @@ func (d *HTTPAgentDispatcher) DispatchAgentStart(ctx context.Context, agent *sto
 				provider, provErr := d.store.GetGroveProvider(ctx, agent.GroveID, agent.RuntimeBrokerID)
 				if provErr != nil {
 					if d.debug {
-						slog.Warn("Failed to get grove provider for path lookup", "error", provErr)
+						d.log.Warn("Failed to get grove provider for path lookup", "error", provErr)
 					}
 				} else if provider.LocalPath != "" {
 					grovePath = provider.LocalPath
 					if d.debug {
-						slog.Debug("Found grove path for broker", "brokerID", agent.RuntimeBrokerID, "path", grovePath)
+						d.log.Debug("Found grove path for broker", "brokerID", agent.RuntimeBrokerID, "path", grovePath)
 					}
 				}
 			}
@@ -1058,7 +1061,7 @@ func (d *HTTPAgentDispatcher) DispatchAgentStart(ctx context.Context, agent *sto
 	envFromStorage, err := d.resolveEnvFromStorage(ctx, agent)
 	if err != nil {
 		if d.debug {
-			slog.Warn("DispatchAgentStart: failed to resolve env from storage", "error", err)
+			d.log.Warn("DispatchAgentStart: failed to resolve env from storage", "error", err)
 		}
 	} else if len(envFromStorage) > 0 {
 		for k, v := range envFromStorage {
@@ -1072,7 +1075,7 @@ func (d *HTTPAgentDispatcher) DispatchAgentStart(ctx context.Context, agent *sto
 	resolvedSecrets, err := d.resolveSecrets(ctx, agent)
 	if err != nil {
 		if d.debug {
-			slog.Warn("DispatchAgentStart: failed to resolve secrets", "error", err)
+			d.log.Warn("DispatchAgentStart: failed to resolve secrets", "error", err)
 		}
 	} else {
 		for _, s := range resolvedSecrets {
@@ -1105,7 +1108,7 @@ func (d *HTTPAgentDispatcher) DispatchAgentStart(ctx context.Context, agent *sto
 		token, err := d.tokenGenerator.GenerateAgentToken(agent.ID, agent.GroveID, additionalScopes...)
 		if err != nil {
 			if d.debug {
-				slog.Warn("DispatchAgentStart: failed to generate agent token", "error", err)
+				d.log.Warn("DispatchAgentStart: failed to generate agent token", "error", err)
 			}
 		} else if token != "" {
 			resolvedEnv["SCION_AUTH_TOKEN"] = token
@@ -1117,7 +1120,7 @@ func (d *HTTPAgentDispatcher) DispatchAgentStart(ctx context.Context, agent *sto
 		if agent.AppliedConfig != nil {
 			configEnvCount = len(agent.AppliedConfig.Env)
 		}
-		slog.Debug("DispatchAgentStart: env resolution summary",
+		d.log.Debug("DispatchAgentStart: env resolution summary",
 			"configEnvCount", configEnvCount,
 			"storageEnvCount", len(envFromStorage),
 			"totalResolvedEnv", len(resolvedEnv),
@@ -1217,12 +1220,12 @@ func (d *HTTPAgentDispatcher) DispatchCheckAgentPrompt(ctx context.Context, agen
 func (d *HTTPAgentDispatcher) resolveSecrets(ctx context.Context, agent *store.Agent) ([]ResolvedSecret, error) {
 	if d.secretBackend == nil {
 		if d.debug {
-			slog.Debug("resolveSecrets: secretBackend is nil, skipping secret resolution")
+			d.log.Debug("resolveSecrets: secretBackend is nil, skipping secret resolution")
 		}
 		return nil, nil
 	}
 	if d.debug {
-		slog.Debug("resolveSecrets: querying secret backend",
+		d.log.Debug("resolveSecrets: querying secret backend",
 			"ownerID", agent.OwnerID,
 			"groveID", agent.GroveID,
 			"brokerID", agent.RuntimeBrokerID,
@@ -1248,7 +1251,7 @@ func (d *HTTPAgentDispatcher) resolveSecrets(ctx context.Context, agent *store.A
 		for i, r := range result {
 			names[i] = r.Name
 		}
-		slog.Debug("resolveSecrets: resolved secrets", "count", len(result), "names", names)
+		d.log.Debug("resolveSecrets: resolved secrets", "count", len(result), "names", names)
 	}
 	return result, nil
 }

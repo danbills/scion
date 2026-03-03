@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"testing"
 
@@ -115,7 +116,7 @@ func TestEnvGather_HubDispatch_AllSatisfied(t *testing.T) {
 	}
 
 	mockClient := &envGatherMockBrokerClient{}
-	dispatcher := NewHTTPAgentDispatcherWithClient(memStore, mockClient, true)
+	dispatcher := NewHTTPAgentDispatcherWithClient(memStore, mockClient, true, slog.Default())
 
 	agent := &store.Agent{
 		ID:              "agent-1",
@@ -172,7 +173,7 @@ func TestEnvGather_HubDispatch_NeedsGather(t *testing.T) {
 			Needs:    []string{"SECRET"},
 		},
 	}
-	dispatcher := NewHTTPAgentDispatcherWithClient(memStore, mockClient, true)
+	dispatcher := NewHTTPAgentDispatcherWithClient(memStore, mockClient, true, slog.Default())
 
 	agent := &store.Agent{
 		ID:              "agent-2",
@@ -220,7 +221,7 @@ func TestEnvGather_HubDispatch_FinalizeEnv(t *testing.T) {
 	}
 
 	mockClient := &envGatherMockBrokerClient{}
-	dispatcher := NewHTTPAgentDispatcherWithClient(memStore, mockClient, true)
+	dispatcher := NewHTTPAgentDispatcherWithClient(memStore, mockClient, true, slog.Default())
 
 	agent := &store.Agent{
 		ID:              "agent-3",
@@ -286,7 +287,7 @@ func TestEnvGather_HubHandler_202Response(t *testing.T) {
 			Needs:    []string{"GEMINI_API_KEY"},
 		},
 	}
-	dispatcher := NewHTTPAgentDispatcherWithClient(st, mockClient, true)
+	dispatcher := NewHTTPAgentDispatcherWithClient(st, mockClient, true, slog.Default())
 	srv.SetDispatcher(dispatcher)
 
 	// Create agent with GatherEnv=true
@@ -362,7 +363,7 @@ func TestEnvGather_HubHandler_GroveRoute_202Response(t *testing.T) {
 			Needs:    []string{"GEMINI_API_KEY"},
 		},
 	}
-	dispatcher := NewHTTPAgentDispatcherWithClient(st, mockClient, true)
+	dispatcher := NewHTTPAgentDispatcherWithClient(st, mockClient, true, slog.Default())
 	srv.SetDispatcher(dispatcher)
 
 	// Create agent via grove-scoped route with GatherEnv=true
@@ -444,7 +445,7 @@ func TestEnvGather_HubHandler_SubmitEnv(t *testing.T) {
 
 	// Set up dispatcher
 	mockClient := &envGatherMockBrokerClient{}
-	dispatcher := NewHTTPAgentDispatcherWithClient(st, mockClient, true)
+	dispatcher := NewHTTPAgentDispatcherWithClient(st, mockClient, true, slog.Default())
 	srv.SetDispatcher(dispatcher)
 
 	// Submit env
@@ -548,7 +549,7 @@ func TestEnvGather_HubEnvResolution(t *testing.T) {
 	}
 
 	mockClient := &envGatherMockBrokerClient{}
-	dispatcher := NewHTTPAgentDispatcherWithClient(memStore, mockClient, true)
+	dispatcher := NewHTTPAgentDispatcherWithClient(memStore, mockClient, true, slog.Default())
 
 	agent := &store.Agent{
 		ID:              "agent-env",
@@ -628,7 +629,7 @@ func TestEnvGather_HubHandler_RetryAfterCancel_GlobalRoute(t *testing.T) {
 			Needs:    []string{"GEMINI_API_KEY"},
 		},
 	}
-	dispatcher := NewHTTPAgentDispatcherWithClient(st, mockClient, true)
+	dispatcher := NewHTTPAgentDispatcherWithClient(st, mockClient, true, slog.Default())
 	srv.SetDispatcher(dispatcher)
 
 	// Second create request with GatherEnv=true
@@ -787,7 +788,7 @@ func TestEnvGather_SecretInfoRelay(t *testing.T) {
 			},
 		},
 	}
-	dispatcher := NewHTTPAgentDispatcherWithClient(st, mockClient, true)
+	dispatcher := NewHTTPAgentDispatcherWithClient(st, mockClient, true, slog.Default())
 	srv.SetDispatcher(dispatcher)
 
 	reqBody := map[string]interface{}{
@@ -867,7 +868,7 @@ func TestEnvGather_SecretInfoRelayType(t *testing.T) {
 			},
 		},
 	}
-	dispatcher := NewHTTPAgentDispatcherWithClient(st, mockClient, true)
+	dispatcher := NewHTTPAgentDispatcherWithClient(st, mockClient, true, slog.Default())
 	srv.SetDispatcher(dispatcher)
 
 	reqBody := map[string]interface{}{
@@ -951,7 +952,7 @@ func TestNonGatherEnv_MissingEnvVars_Returns422(t *testing.T) {
 			Needs:    []string{"ANTHROPIC_API_KEY", "CUSTOM_SECRET"},
 		},
 	}
-	dispatcher := NewHTTPAgentDispatcherWithClient(st, mockClient, true)
+	dispatcher := NewHTTPAgentDispatcherWithClient(st, mockClient, true, slog.Default())
 	srv.SetDispatcher(dispatcher)
 
 	// Create agent WITHOUT GatherEnv (simulating web/API caller)
@@ -1036,7 +1037,7 @@ func TestNonGatherEnv_MissingEnvVars_GroveRoute_Returns422(t *testing.T) {
 			Needs:    []string{"ANTHROPIC_API_KEY"},
 		},
 	}
-	dispatcher := NewHTTPAgentDispatcherWithClient(st, mockClient, true)
+	dispatcher := NewHTTPAgentDispatcherWithClient(st, mockClient, true, slog.Default())
 	srv.SetDispatcher(dispatcher)
 
 	// Create agent via grove-scoped route WITHOUT GatherEnv
@@ -1099,7 +1100,7 @@ func TestNonGatherEnv_AllSatisfied_Returns201(t *testing.T) {
 
 	// Mock broker returns nil env requirements (all satisfied)
 	mockClient := &envGatherMockBrokerClient{}
-	dispatcher := NewHTTPAgentDispatcherWithClient(st, mockClient, true)
+	dispatcher := NewHTTPAgentDispatcherWithClient(st, mockClient, true, slog.Default())
 	srv.SetDispatcher(dispatcher)
 
 	// Create agent WITHOUT GatherEnv — all env satisfied
@@ -1189,7 +1190,7 @@ func TestEnvGather_HubHandler_RetryAfterCancel_GroveRoute(t *testing.T) {
 			Needs:    []string{"GEMINI_API_KEY"},
 		},
 	}
-	dispatcher := NewHTTPAgentDispatcherWithClient(st, mockClient, true)
+	dispatcher := NewHTTPAgentDispatcherWithClient(st, mockClient, true, slog.Default())
 	srv.SetDispatcher(dispatcher)
 
 	// Second create request via grove-scoped route with GatherEnv=true
@@ -1280,7 +1281,7 @@ func TestGroveRoute_ResolvesUserScopedEnvVars(t *testing.T) {
 
 	// Mock broker that captures the dispatch request
 	mockClient := &envGatherMockBrokerClient{}
-	dispatcher := NewHTTPAgentDispatcherWithClient(st, mockClient, true)
+	dispatcher := NewHTTPAgentDispatcherWithClient(st, mockClient, true, slog.Default())
 	srv.SetDispatcher(dispatcher)
 
 	// Create agent via grove-scoped route (simulates the sync flow)
@@ -1369,7 +1370,7 @@ func TestGroveRoute_ResolvesUserScopedSecrets(t *testing.T) {
 
 	// Mock broker that captures the dispatch request
 	mockClient := &envGatherMockBrokerClient{}
-	dispatcher := NewHTTPAgentDispatcherWithClient(st, mockClient, true)
+	dispatcher := NewHTTPAgentDispatcherWithClient(st, mockClient, true, slog.Default())
 	dispatcher.SetSecretBackend(backend)
 	srv.SetDispatcher(dispatcher)
 

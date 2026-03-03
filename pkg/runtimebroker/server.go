@@ -172,6 +172,11 @@ type Server struct {
 	// Keyed by agent name (used as agent identifier on the broker).
 	pendingEnvGather   map[string]*pendingAgentState
 	pendingEnvGatherMu sync.Mutex
+
+	// Subsystem loggers for handler methods
+	agentLifecycleLog *slog.Logger
+	messageLog        *slog.Logger
+	envSecretLog      *slog.Logger
 }
 
 // pendingAgentState holds the partial state for an agent waiting on env-gather.
@@ -199,6 +204,11 @@ func New(cfg ServerConfig, mgr agent.Manager, rt runtime.Runtime) *Server {
 		version:        "0.1.0", // TODO: Get from build info
 		hubConnections: make(map[string]*HubConnection),
 		pendingEnvGather: make(map[string]*pendingAgentState),
+
+		// Subsystem loggers
+		agentLifecycleLog: logging.Subsystem("broker.agent-lifecycle"),
+		messageLog:        logging.Subsystem("broker.messages"),
+		envSecretLog:      logging.Subsystem("broker.env-secrets"),
 	}
 
 	// Initialize Hub integration if enabled

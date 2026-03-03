@@ -18,6 +18,7 @@ package hub
 
 import (
 	"context"
+	"log/slog"
 	"testing"
 
 	"github.com/ptone/scion-agent/pkg/secret"
@@ -85,7 +86,7 @@ func TestResolveSecrets(t *testing.T) {
 	// Create dispatcher with local backend (reads work, writes are blocked)
 	backend := secret.NewLocalBackend(memStore)
 	mockClient := &mockRuntimeBrokerClient{}
-	dispatcher := NewHTTPAgentDispatcherWithClient(memStore, mockClient, false)
+	dispatcher := NewHTTPAgentDispatcherWithClient(memStore, mockClient, false, slog.Default())
 	dispatcher.SetSecretBackend(backend)
 
 	agent := &store.Agent{
@@ -199,7 +200,7 @@ func TestResolveSecrets_WithBackend(t *testing.T) {
 	// Create dispatcher with local backend
 	backend := secret.NewLocalBackend(memStore)
 	mockClient := &mockRuntimeBrokerClient{}
-	dispatcher := NewHTTPAgentDispatcherWithClient(memStore, mockClient, false)
+	dispatcher := NewHTTPAgentDispatcherWithClient(memStore, mockClient, false, slog.Default())
 	dispatcher.SetSecretBackend(backend)
 
 	agent := &store.Agent{
@@ -251,7 +252,7 @@ func TestResolveSecrets_NoOwner(t *testing.T) {
 
 	backend := secret.NewLocalBackend(memStore)
 	mockClient := &mockRuntimeBrokerClient{}
-	dispatcher := NewHTTPAgentDispatcherWithClient(memStore, mockClient, false)
+	dispatcher := NewHTTPAgentDispatcherWithClient(memStore, mockClient, false, slog.Default())
 	dispatcher.SetSecretBackend(backend)
 
 	agent := &store.Agent{
@@ -275,7 +276,7 @@ func TestResolveSecrets_NoBackend(t *testing.T) {
 
 	// Dispatcher without a secret backend returns nil
 	mockClient := &mockRuntimeBrokerClient{}
-	dispatcher := NewHTTPAgentDispatcherWithClient(memStore, mockClient, false)
+	dispatcher := NewHTTPAgentDispatcherWithClient(memStore, mockClient, false, slog.Default())
 
 	agent := &store.Agent{
 		ID:      "agent-1",

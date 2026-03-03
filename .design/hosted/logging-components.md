@@ -1,7 +1,7 @@
 # Structured Logging: Component Granularity
 
 ## Status
-**Proposal** | March 2026
+**Implemented (Tier 1 & 2)** | March 2026
 
 ## Problem
 

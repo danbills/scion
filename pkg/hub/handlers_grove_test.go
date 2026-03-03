@@ -19,6 +19,7 @@ package hub
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -541,7 +542,7 @@ func TestDeleteGrove_HubNative_DispatchesCleanupToBrokers(t *testing.T) {
 
 	// Set up a mock client and dispatcher
 	mockClient := &mockRuntimeBrokerClient{}
-	disp := NewHTTPAgentDispatcherWithClient(s, mockClient, false)
+	disp := NewHTTPAgentDispatcherWithClient(s, mockClient, false, slog.Default())
 	srv.SetDispatcher(disp)
 
 	// Delete grove
@@ -606,7 +607,7 @@ func TestDeleteGrove_HubNative_SkipsEmbeddedBroker(t *testing.T) {
 
 	// Set up mock client and dispatcher
 	mockClient := &mockRuntimeBrokerClient{}
-	disp := NewHTTPAgentDispatcherWithClient(s, mockClient, false)
+	disp := NewHTTPAgentDispatcherWithClient(s, mockClient, false, slog.Default())
 	srv.SetDispatcher(disp)
 
 	// Delete grove
@@ -650,7 +651,7 @@ func TestDeleteGrove_GitBacked_NoCleanupDispatched(t *testing.T) {
 
 	// Set up mock client and dispatcher
 	mockClient := &mockRuntimeBrokerClient{}
-	disp := NewHTTPAgentDispatcherWithClient(s, mockClient, false)
+	disp := NewHTTPAgentDispatcherWithClient(s, mockClient, false, slog.Default())
 	srv.SetDispatcher(disp)
 
 	// Delete grove

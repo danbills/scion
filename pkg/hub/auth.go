@@ -42,6 +42,8 @@ type AuthConfig struct {
 	TrustedProxies []string
 	// Debug enables verbose logging
 	Debug bool
+	// Logger is the subsystem logger for auth middleware (defaults to slog.Default())
+	Logger *slog.Logger
 }
 
 // tokenType represents the type of authentication token.
@@ -66,6 +68,10 @@ const (
 func UnifiedAuthMiddleware(cfg AuthConfig) func(http.Handler) http.Handler {
 	// Parse trusted proxy CIDRs
 	trustedNets := parseTrustedProxies(cfg.TrustedProxies)
+	log := cfg.Logger
+	if log == nil {
+		log = slog.Default()
+	}
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -80,7 +86,7 @@ func UnifiedAuthMiddleware(cfg AuthConfig) func(http.Handler) http.Handler {
 				} else if hasAuth {
 					authPrefix = authHeader
 				}
-				slog.Debug("Auth check",
+				log.Debug("Auth check",
 					slog.String("method", r.Method),
 					slog.String("path", r.URL.Path),
 					slog.Bool("has_auth", hasAuth),
@@ -91,7 +97,7 @@ func UnifiedAuthMiddleware(cfg AuthConfig) func(http.Handler) http.Handler {
 			// Skip auth for unauthenticated endpoints (health checks, CLI OAuth)
 			if isUnauthenticatedEndpoint(r.URL.Path) {
 				if cfg.Debug {
-					slog.Debug("Skipping auth for unauthenticated endpoint", "path", r.URL.Path)
+					log.Debug("Skipping auth for unauthenticated endpoint", "path", r.URL.Path)
 				}
 				next.ServeHTTP(w, r)
 				return
@@ -104,7 +110,7 @@ func UnifiedAuthMiddleware(cfg AuthConfig) func(http.Handler) http.Handler {
 						ctx = context.WithValue(ctx, agentContextKey{}, claims)
 						ctx = contextWithIdentity(ctx, &agentIdentityWrapper{claims})
 						if cfg.Debug {
-							slog.Debug("Agent authenticated", "subject", claims.Subject)
+							log.Debug("Agent authenticated", "subject", claims.Subject)
 						}
 						next.ServeHTTP(w, r.WithContext(ctx))
 						return
@@ -122,7 +128,7 @@ func UnifiedAuthMiddleware(cfg AuthConfig) func(http.Handler) http.Handler {
 			// If present, pass through to BrokerAuthMiddleware which runs next
 			if brokerID := r.Header.Get("X-Scion-Broker-ID"); brokerID != "" {
 				if cfg.Debug {
-					slog.Debug("Broker auth headers present, deferring to BrokerAuthMiddleware", "brokerID", brokerID)
+					log.Debug("Broker auth headers present, deferring to BrokerAuthMiddleware", "brokerID", brokerID)
 				}
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
@@ -137,7 +143,7 @@ func UnifiedAuthMiddleware(cfg AuthConfig) func(http.Handler) http.Handler {
 						ctx = context.WithValue(ctx, userContextKey{}, user)
 						ctx = contextWithIdentity(ctx, user)
 						if cfg.Debug {
-							slog.Debug("Proxy user authenticated", "email", user.Email())
+							log.Debug("Proxy user authenticated", "email", user.Email())
 						}
 						next.ServeHTTP(w, r.WithContext(ctx))
 						return
@@ -166,7 +172,7 @@ func UnifiedAuthMiddleware(cfg AuthConfig) func(http.Handler) http.Handler {
 				ctx = context.WithValue(ctx, userContextKey{}, devUser)
 				ctx = contextWithIdentity(ctx, devUser)
 				if cfg.Debug {
-					slog.Debug("Dev user authenticated")
+					log.Debug("Dev user authenticated")
 				}
 
 			case tokenTypeAPIKey:
@@ -184,7 +190,7 @@ func UnifiedAuthMiddleware(cfg AuthConfig) func(http.Handler) http.Handler {
 				ctx = context.WithValue(ctx, userContextKey{}, user)
 				ctx = contextWithIdentity(ctx, user)
 				if cfg.Debug {
-					slog.Debug("API key authenticated", "email", user.Email())
+					log.Debug("API key authenticated", "email", user.Email())
 				}
 
 			case tokenTypeUser:
@@ -195,7 +201,7 @@ func UnifiedAuthMiddleware(cfg AuthConfig) func(http.Handler) http.Handler {
 						ctx = context.WithValue(ctx, userContextKey{}, devUser)
 						ctx = contextWithIdentity(ctx, devUser)
 						if cfg.Debug {
-							slog.Debug("Dev user authenticated (fallback)")
+							log.Debug("Dev user authenticated (fallback)")
 						}
 						next.ServeHTTP(w, r.WithContext(ctx))
 						return
@@ -220,7 +226,7 @@ func UnifiedAuthMiddleware(cfg AuthConfig) func(http.Handler) http.Handler {
 				ctx = context.WithValue(ctx, userContextKey{}, user)
 				ctx = contextWithIdentity(ctx, user)
 				if cfg.Debug {
-					slog.Debug("User authenticated", "email", user.Email())
+					log.Debug("User authenticated", "email", user.Email())
 				}
 
 			default:

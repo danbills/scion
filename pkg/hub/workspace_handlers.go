@@ -17,7 +17,6 @@ package hub
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -458,7 +457,7 @@ func (s *Server) handleWorkspaceSyncToFinalize(w http.ResponseWriter, r *http.Re
 
 		// Update agent status from broker response
 		if err := s.store.UpdateAgent(ctx, agent); err != nil {
-			slog.Warn("Failed to update agent status after dispatch", "error", err)
+			s.workspaceLog.Warn("Failed to update agent status after dispatch", "error", err)
 		}
 
 		writeJSON(w, http.StatusOK, SyncToFinalizeResponse{
@@ -652,7 +651,7 @@ func (s *Server) syncHubNativeWorkspaceBack(ctx context.Context, agent *store.Ag
 
 	grove, err := s.store.GetGrove(ctx, agent.GroveID)
 	if err != nil {
-		slog.Warn("syncHubNativeWorkspaceBack: failed to get grove", "groveID", agent.GroveID, "error", err)
+		s.workspaceLog.Warn("syncHubNativeWorkspaceBack: failed to get grove", "groveID", agent.GroveID, "error", err)
 		return
 	}
 
@@ -679,17 +678,17 @@ func (s *Server) syncHubNativeWorkspaceBack(ctx context.Context, agent *store.Ag
 
 	workspacePath, err := hubNativeGrovePath(grove.Slug)
 	if err != nil {
-		slog.Warn("syncHubNativeWorkspaceBack: failed to get grove path", "error", err)
+		s.workspaceLog.Warn("syncHubNativeWorkspaceBack: failed to get grove path", "error", err)
 		return
 	}
 
 	// Use the grove-level storage path for hub-native groves
 	groveStoragePath := storage.GroveWorkspaceStoragePath(grove.ID)
 	if err := gcp.SyncFromGCS(ctx, stor.Bucket(), groveStoragePath+"/files", workspacePath); err != nil {
-		slog.Warn("syncHubNativeWorkspaceBack: GCS download failed",
+		s.workspaceLog.Warn("syncHubNativeWorkspaceBack: GCS download failed",
 			"grove", grove.ID, "storagePath", groveStoragePath, "error", err)
 	} else {
-		slog.Info("syncHubNativeWorkspaceBack: workspace synced to Hub filesystem",
+		s.workspaceLog.Info("syncHubNativeWorkspaceBack: workspace synced to Hub filesystem",
 			"grove", grove.ID, "path", workspacePath)
 	}
 }

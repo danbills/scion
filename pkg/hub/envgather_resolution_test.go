@@ -18,6 +18,7 @@ package hub
 
 import (
 	"context"
+	"log/slog"
 	"testing"
 
 	"github.com/ptone/scion-agent/pkg/api"
@@ -62,7 +63,7 @@ func TestResolution_PlainEnvVar(t *testing.T) {
 	}
 
 	mockClient := &envGatherMockBrokerClient{}
-	dispatcher := NewHTTPAgentDispatcherWithClient(memStore, mockClient, true)
+	dispatcher := NewHTTPAgentDispatcherWithClient(memStore, mockClient, true, slog.Default())
 
 	agent := &store.Agent{
 		ID:              "agent-res-1",
@@ -124,7 +125,7 @@ func TestResolution_SecretUserScope(t *testing.T) {
 	}
 
 	mockClient := &envGatherMockBrokerClient{}
-	dispatcher := NewHTTPAgentDispatcherWithClient(memStore, mockClient, true)
+	dispatcher := NewHTTPAgentDispatcherWithClient(memStore, mockClient, true, slog.Default())
 	dispatcher.SetSecretBackend(backend)
 
 	agent := &store.Agent{
@@ -199,7 +200,7 @@ func TestResolution_GroveEnvVar(t *testing.T) {
 	}
 
 	mockClient := &envGatherMockBrokerClient{}
-	dispatcher := NewHTTPAgentDispatcherWithClient(memStore, mockClient, true)
+	dispatcher := NewHTTPAgentDispatcherWithClient(memStore, mockClient, true, slog.Default())
 
 	agent := &store.Agent{
 		ID:              "agent-res-3",
@@ -286,7 +287,7 @@ func TestResolution_SecretPromotedEnvVar(t *testing.T) {
 	}
 
 	mockClient := &envGatherMockBrokerClient{}
-	dispatcher := NewHTTPAgentDispatcherWithClient(memStore, mockClient, true)
+	dispatcher := NewHTTPAgentDispatcherWithClient(memStore, mockClient, true, slog.Default())
 	dispatcher.SetSecretBackend(backend)
 
 	agent := &store.Agent{

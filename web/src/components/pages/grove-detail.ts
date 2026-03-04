@@ -263,6 +263,18 @@ export class ScionPageGroveDetail extends LitElement {
       opacity: 0.7;
     }
 
+    .agent-meta .broker-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+      color: var(--scion-text-muted, #64748b);
+      text-decoration: none;
+    }
+
+    .agent-meta .broker-link:hover {
+      color: var(--scion-primary, #3b82f6);
+    }
+
     .agent-task {
       font-size: 0.875rem;
       color: var(--scion-text, #1e293b);
@@ -1101,7 +1113,15 @@ export class ScionPageGroveDetail extends LitElement {
               </a>
             </h3>
             <div class="agent-meta">
-              <sl-icon name="code-square"></sl-icon> ${agent.template}
+              <div><sl-icon name="code-square"></sl-icon> ${agent.template}</div>
+              ${agent.runtimeBrokerId
+                ? html`<div>
+                    <a href="/brokers/${agent.runtimeBrokerId}" class="broker-link">
+                      <sl-icon name="hdd-rack"></sl-icon>
+                      ${agent.runtimeBrokerName || agent.runtimeBrokerId}
+                    </a>
+                  </div>`
+                : ''}
             </div>
           </div>
           <scion-status-badge

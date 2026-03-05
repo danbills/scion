@@ -394,6 +394,18 @@ func runInit(args []string) int {
 		log.Debug("Heartbeat loop stopped")
 	}
 
+	// Workaround: On some systems using the Apple Virtualization Framework
+	// (apple-container runtime), this dangling symlink causes the container
+	// removal to hang. Remove it preemptively during shutdown.
+	const debugLatestSymlink = "/home/scion/.claude/debug/latest"
+	if err := os.Remove(debugLatestSymlink); err != nil {
+		if !os.IsNotExist(err) {
+			log.Debug("Failed to remove debug symlink %s: %v", debugLatestSymlink, err)
+		}
+	} else {
+		log.Debug("Removed debug symlink %s (apple-container workaround)", debugLatestSymlink)
+	}
+
 	// Report shutting down to Hub if in hosted mode
 	if hubClient := hub.NewClient(); hubClient != nil && hubClient.IsConfigured() {
 		hubCtx, hubCancel := context.WithTimeout(context.Background(), 5*time.Second)

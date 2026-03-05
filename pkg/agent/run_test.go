@@ -971,6 +971,147 @@ profiles:
 	})
 }
 
+func TestTelemetryOverrideFlag(t *testing.T) {
+	// Verify that TelemetryOverride in StartOptions takes highest priority,
+	// overriding the value from scion-agent.json.
+	tmpDir := t.TempDir()
+
+	oldWd, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(oldWd)
+
+	originalHome := os.Getenv("HOME")
+	defer os.Setenv("HOME", originalHome)
+	os.Setenv("HOME", tmpDir)
+
+	globalScionDir := filepath.Join(tmpDir, ".scion")
+
+	hcDir := filepath.Join(globalScionDir, "harness-configs", "test-harness")
+	os.MkdirAll(hcDir, 0755)
+	os.WriteFile(filepath.Join(hcDir, "config.yaml"), []byte("harness: gemini\nuser: scion\nimage: test-image:latest\n"), 0644)
+
+	tplDir := filepath.Join(globalScionDir, "templates", "default")
+	os.MkdirAll(tplDir, 0755)
+	os.WriteFile(filepath.Join(tplDir, "scion-agent.json"), []byte(`{"default_harness_config": "test-harness"}`), 0644)
+
+	os.WriteFile(filepath.Join(globalScionDir, "settings.yaml"), []byte(`schema_version: "1"
+active_profile: local
+profiles:
+  local:
+    runtime: docker
+`), 0644)
+
+	projectDir := filepath.Join(tmpDir, "project")
+	projectScionDir := filepath.Join(projectDir, ".scion")
+	os.MkdirAll(projectScionDir, 0755)
+
+	boolPtr := func(b bool) *bool { return &b }
+
+	t.Run("override enables telemetry when config disables it", func(t *testing.T) {
+		var capturedConfig runtime.RunConfig
+		mockRT := &runtime.MockRuntime{
+			ListFunc: func(ctx context.Context, labelFilter map[string]string) ([]api.AgentInfo, error) {
+				return []api.AgentInfo{}, nil
+			},
+			RunFunc: func(ctx context.Context, config runtime.RunConfig) (string, error) {
+				capturedConfig = config
+				return "mock-id", nil
+			},
+		}
+
+		agentDir := filepath.Join(projectScionDir, "agents", "override-enable")
+		os.MkdirAll(filepath.Join(agentDir, "home"), 0755)
+		os.WriteFile(filepath.Join(agentDir, "scion-agent.json"), []byte(`{
+			"harness": "gemini",
+			"telemetry": {"enabled": false}
+		}`), 0644)
+
+		mgr := NewManager(mockRT)
+		_, err := mgr.Start(context.Background(), api.StartOptions{
+			Name:              "override-enable",
+			GrovePath:         projectScionDir,
+			NoAuth:            true,
+			TelemetryOverride: boolPtr(true),
+		})
+		if err != nil {
+			t.Fatalf("Start failed: %v", err)
+		}
+
+		if !capturedConfig.TelemetryEnabled {
+			t.Error("expected TelemetryEnabled = true (override should win), got false")
+		}
+	})
+
+	t.Run("override disables telemetry when config enables it", func(t *testing.T) {
+		var capturedConfig runtime.RunConfig
+		mockRT := &runtime.MockRuntime{
+			ListFunc: func(ctx context.Context, labelFilter map[string]string) ([]api.AgentInfo, error) {
+				return []api.AgentInfo{}, nil
+			},
+			RunFunc: func(ctx context.Context, config runtime.RunConfig) (string, error) {
+				capturedConfig = config
+				return "mock-id", nil
+			},
+		}
+
+		agentDir := filepath.Join(projectScionDir, "agents", "override-disable")
+		os.MkdirAll(filepath.Join(agentDir, "home"), 0755)
+		os.WriteFile(filepath.Join(agentDir, "scion-agent.json"), []byte(`{
+			"harness": "gemini",
+			"telemetry": {"enabled": true}
+		}`), 0644)
+
+		mgr := NewManager(mockRT)
+		_, err := mgr.Start(context.Background(), api.StartOptions{
+			Name:              "override-disable",
+			GrovePath:         projectScionDir,
+			NoAuth:            true,
+			TelemetryOverride: boolPtr(false),
+		})
+		if err != nil {
+			t.Fatalf("Start failed: %v", err)
+		}
+
+		if capturedConfig.TelemetryEnabled {
+			t.Error("expected TelemetryEnabled = false (override should win), got true")
+		}
+	})
+
+	t.Run("override enables telemetry when no telemetry config exists", func(t *testing.T) {
+		var capturedConfig runtime.RunConfig
+		mockRT := &runtime.MockRuntime{
+			ListFunc: func(ctx context.Context, labelFilter map[string]string) ([]api.AgentInfo, error) {
+				return []api.AgentInfo{}, nil
+			},
+			RunFunc: func(ctx context.Context, config runtime.RunConfig) (string, error) {
+				capturedConfig = config
+				return "mock-id", nil
+			},
+		}
+
+		agentDir := filepath.Join(projectScionDir, "agents", "override-no-config")
+		os.MkdirAll(filepath.Join(agentDir, "home"), 0755)
+		os.WriteFile(filepath.Join(agentDir, "scion-agent.json"), []byte(`{
+			"harness": "gemini"
+		}`), 0644)
+
+		mgr := NewManager(mockRT)
+		_, err := mgr.Start(context.Background(), api.StartOptions{
+			Name:              "override-no-config",
+			GrovePath:         projectScionDir,
+			NoAuth:            true,
+			TelemetryOverride: boolPtr(true),
+		})
+		if err != nil {
+			t.Fatalf("Start failed: %v", err)
+		}
+
+		if !capturedConfig.TelemetryEnabled {
+			t.Error("expected TelemetryEnabled = true (override should create telemetry config), got false")
+		}
+	})
+}
+
 func TestBuildAgentEnv_TelemetryNoOverrideExplicit(t *testing.T) {
 	// Explicit opts.Env values must not be overwritten by telemetry config.
 	enabled := true

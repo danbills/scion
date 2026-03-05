@@ -463,7 +463,8 @@ type StartOptions struct {
 	NoAuth          bool
 	Branch          string
 	Workspace       string
-	GitClone        *GitCloneConfig // When set, skip workspace creation; sciontool clones inside container
+	GitClone          *GitCloneConfig // When set, skip workspace creation; sciontool clones inside container
+	TelemetryOverride *bool           // Explicit telemetry override from CLI flags (--enable-telemetry / --disable-telemetry)
 }
 
 type StatusEvent struct {

@@ -456,6 +456,18 @@ func (m *AgentManager) Start(ctx context.Context, opts api.StartOptions) (*api.A
 		}
 	}
 
+	// Apply CLI telemetry override (--enable-telemetry / --disable-telemetry).
+	// This has highest priority, overriding settings, templates, and harness configs.
+	if opts.TelemetryOverride != nil {
+		if finalScionCfg == nil {
+			finalScionCfg = &api.ScionConfig{}
+		}
+		if finalScionCfg.Telemetry == nil {
+			finalScionCfg.Telemetry = &api.TelemetryConfig{}
+		}
+		finalScionCfg.Telemetry.Enabled = opts.TelemetryOverride
+	}
+
 	// Inject telemetry config as env vars for sciontool.
 	// Only set vars not already present (respecting explicit overrides).
 	if finalScionCfg != nil && finalScionCfg.Telemetry != nil {

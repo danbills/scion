@@ -63,6 +63,8 @@ var (
 	runtimeBrokerID   string
 	harnessConfigFlag string
 	notify            bool
+	enableTelemetry   bool
+	disableTelemetry  bool
 )
 
 // HubContext holds the context for Hub operations.
@@ -266,6 +268,11 @@ func RunAgent(cmd *cobra.Command, args []string, resume bool) error {
 		return fmt.Errorf("--format json and --attach are mutually exclusive")
 	}
 
+	// Reject --enable-telemetry with --disable-telemetry (mutually exclusive)
+	if enableTelemetry && disableTelemetry {
+		return fmt.Errorf("--enable-telemetry and --disable-telemetry are mutually exclusive")
+	}
+
 	// Check if Hub should be used, excluding the target agent from sync requirements.
 	// This allows starting/resuming an agent even if it exists on Hub but not locally
 	// (will be created via Hub) or if other agents are out of sync.
@@ -332,6 +339,15 @@ func RunAgent(cmd *cobra.Command, args []string, resume bool) error {
 		NoAuth:        noAuth,
 		Branch:        branch,
 		Workspace:     workspace,
+	}
+
+	// Apply telemetry override from CLI flags
+	if enableTelemetry {
+		val := true
+		opts.TelemetryOverride = &val
+	} else if disableTelemetry {
+		val := false
+		opts.TelemetryOverride = &val
 	}
 
 	// Propagate debug mode to container so sciontool logs debug info
@@ -494,16 +510,22 @@ func startAgentViaHub(hubCtx *HubContext, agentName, task string, resume bool) e
 		Notify:       notify,
 	}
 
-	// Build config if we have image override or debug mode
-	if agentImage != "" || debugMode {
+	// Build config if we have image override, debug mode, or telemetry override
+	if agentImage != "" || debugMode || enableTelemetry || disableTelemetry {
 		req.Config = &hubclient.AgentConfig{
 			Image: agentImage,
 		}
-		// Pass debug mode to agent via env var
+		configEnv := make(map[string]string)
 		if debugMode {
-			req.Config.Env = map[string]string{
-				"SCION_DEBUG": "1",
-			}
+			configEnv["SCION_DEBUG"] = "1"
+		}
+		if enableTelemetry {
+			configEnv["SCION_TELEMETRY_ENABLED"] = "true"
+		} else if disableTelemetry {
+			configEnv["SCION_TELEMETRY_ENABLED"] = "false"
+		}
+		if len(configEnv) > 0 {
+			req.Config.Env = configEnv
 		}
 	}
 

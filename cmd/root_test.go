@@ -325,6 +325,39 @@ func TestHarnessConfigAliasRegistered(t *testing.T) {
 	assert.NotNil(t, hFlag, "--harness flag should be registered on create")
 }
 
+func TestTelemetryFlagsRegistered(t *testing.T) {
+	// Verify --enable-telemetry and --disable-telemetry flags exist on startCmd
+	etFlag := startCmd.Flags().Lookup("enable-telemetry")
+	assert.NotNil(t, etFlag, "--enable-telemetry flag should be registered on start")
+
+	dtFlag := startCmd.Flags().Lookup("disable-telemetry")
+	assert.NotNil(t, dtFlag, "--disable-telemetry flag should be registered on start")
+
+	// Verify flags exist on resumeCmd
+	etFlag = resumeCmd.Flags().Lookup("enable-telemetry")
+	assert.NotNil(t, etFlag, "--enable-telemetry flag should be registered on resume")
+
+	dtFlag = resumeCmd.Flags().Lookup("disable-telemetry")
+	assert.NotNil(t, dtFlag, "--disable-telemetry flag should be registered on resume")
+}
+
+func TestTelemetryFlagsMutualExclusion(t *testing.T) {
+	// Save and restore flag state
+	origEnable := enableTelemetry
+	origDisable := disableTelemetry
+	defer func() {
+		enableTelemetry = origEnable
+		disableTelemetry = origDisable
+	}()
+
+	enableTelemetry = true
+	disableTelemetry = true
+
+	err := RunAgent(&cobra.Command{Use: "start"}, []string{"test-agent"}, false)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "--enable-telemetry and --disable-telemetry are mutually exclusive")
+}
+
 func TestIsLocalEndpoint(t *testing.T) {
 	tests := []struct {
 		endpoint string

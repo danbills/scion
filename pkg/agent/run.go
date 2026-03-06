@@ -115,7 +115,7 @@ func (m *AgentManager) Start(ctx context.Context, opts api.StartOptions) (*api.A
 	// Load settings for registry resolution
 	settings, settingsWarnings, err := config.LoadEffectiveSettings(projectDir)
 	if err != nil {
-		// Fallback to defaults or log?
+		util.Debugf("Start: LoadEffectiveSettings(%s) error: %v", projectDir, err)
 	}
 	config.PrintDeprecationWarnings(settingsWarnings)
 
@@ -217,10 +217,19 @@ func (m *AgentManager) Start(ctx context.Context, opts api.StartOptions) (*api.A
 		// the TelemetryEnabled flag are available at start time. This mirrors
 		// the merge in ProvisionAgent.
 		if settings.Telemetry != nil {
+			util.Debugf("Start: merging settings telemetry config (cloud=%v, endpoint=%q)",
+				settings.Telemetry.Cloud != nil, func() string {
+					if settings.Telemetry.Cloud != nil {
+						return settings.Telemetry.Cloud.Endpoint
+					}
+					return ""
+				}())
 			settingsCfg := &api.ScionConfig{
 				Telemetry: config.ConvertV1TelemetryToAPI(settings.Telemetry),
 			}
 			finalScionCfg = config.MergeScionConfig(settingsCfg, finalScionCfg)
+		} else {
+			util.Debugf("Start: settings.Telemetry is nil, skipping telemetry merge")
 		}
 	}
 
@@ -495,6 +504,7 @@ func (m *AgentManager) Start(ctx context.Context, opts api.StartOptions) (*api.A
 	// Apply CLI telemetry override (--enable-telemetry / --disable-telemetry).
 	// This has highest priority, overriding settings, templates, and harness configs.
 	if opts.TelemetryOverride != nil {
+		util.Debugf("Start: applying TelemetryOverride=%v", *opts.TelemetryOverride)
 		if finalScionCfg == nil {
 			finalScionCfg = &api.ScionConfig{}
 		}
@@ -502,12 +512,15 @@ func (m *AgentManager) Start(ctx context.Context, opts api.StartOptions) (*api.A
 			finalScionCfg.Telemetry = &api.TelemetryConfig{}
 		}
 		finalScionCfg.Telemetry.Enabled = opts.TelemetryOverride
+	} else {
+		util.Debugf("Start: no TelemetryOverride set")
 	}
 
 	// Inject telemetry config as env vars for sciontool.
 	// Only set vars not already present (respecting explicit overrides).
 	if finalScionCfg != nil && finalScionCfg.Telemetry != nil {
 		telemetryEnv := config.TelemetryConfigToEnv(finalScionCfg.Telemetry)
+		util.Debugf("Start: injecting %d telemetry env vars", len(telemetryEnv))
 		for k, v := range telemetryEnv {
 			if _, exists := opts.Env[k]; !exists {
 				opts.Env[k] = v
@@ -543,6 +556,11 @@ func (m *AgentManager) Start(ctx context.Context, opts api.StartOptions) (*api.A
 	// Telemetry defaults to enabled when not explicitly set to false.
 	telemetryEnabled := finalScionCfg != nil && finalScionCfg.Telemetry != nil &&
 		(finalScionCfg.Telemetry.Enabled == nil || *finalScionCfg.Telemetry.Enabled)
+	util.Debugf("Start: telemetryEnabled=%v (hasCfg=%v, hasTelem=%v, cloud=%v)",
+		telemetryEnabled,
+		finalScionCfg != nil,
+		finalScionCfg != nil && finalScionCfg.Telemetry != nil,
+		finalScionCfg != nil && finalScionCfg.Telemetry != nil && finalScionCfg.Telemetry.Cloud != nil)
 
 	runCfg := runtime.RunConfig{
 		Name:             opts.Name,

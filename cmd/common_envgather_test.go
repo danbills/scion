@@ -142,6 +142,78 @@ func TestGatherAndSubmitEnv_NonInteractiveMultipleKeysMissing(t *testing.T) {
 	assert.Contains(t, err.Error(), "KEY_B")
 }
 
+// TestStartAgentViaHub_EnvGatherFailureCleansUp verifies that when env-gather
+// cannot satisfy required variables, the provisioning agent is deleted on the Hub.
+func TestStartAgentViaHub_EnvGatherFailureCleansUp(t *testing.T) {
+	origNonInteractive := nonInteractive
+	origAutoConfirm := autoConfirm
+	origOutputFormat := outputFormat
+	defer func() {
+		nonInteractive = origNonInteractive
+		autoConfirm = origAutoConfirm
+		outputFormat = origOutputFormat
+	}()
+
+	nonInteractive = true
+	autoConfirm = true
+	outputFormat = "json"
+
+	// Keys not in local env so env-gather must fail
+	os.Unsetenv("MISSING_KEY")
+
+	agentID := "agent-cleanup-1"
+	groveID := "grove-cleanup"
+	var deleteCalled bool
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/healthz" && r.Method == http.MethodGet:
+			json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok"})
+
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/groves/"+groveID+"/agents":
+			// CreateAgent — return 202 with env-gather requirements
+			w.WriteHeader(http.StatusAccepted)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"agent": map[string]interface{}{"id": agentID, "name": "test-agent", "status": "provisioning"},
+				"envGather": map[string]interface{}{
+					"agentId":  agentID,
+					"required": []string{"MISSING_KEY"},
+					"needs":    []string{"MISSING_KEY"},
+				},
+			})
+
+		case r.Method == http.MethodDelete:
+			// Agent delete endpoint — record that cleanup happened
+			deleteCalled = true
+			w.WriteHeader(http.StatusNoContent)
+
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/groves":
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"groves": []map[string]interface{}{{"id": groveID, "name": "test"}},
+			})
+
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client, err := hubclient.New(server.URL)
+	require.NoError(t, err)
+
+	hubCtx := &HubContext{
+		Client:   client,
+		Endpoint: server.URL,
+		GroveID:  groveID,
+	}
+
+	err = startAgentViaHub(hubCtx, "test-agent", "", false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "env-gather failed")
+	assert.True(t, deleteCalled, "expected provisioning agent to be deleted on env-gather failure")
+}
+
 // newEnvGatherMockHubServer creates a mock Hub server that handles the SubmitEnv
 // endpoint and captures the submitted environment variables.
 func newEnvGatherMockHubServer(t *testing.T, groveID string) (*httptest.Server, *map[string]string) {

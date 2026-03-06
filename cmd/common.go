@@ -20,8 +20,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/ptone/scion-agent/pkg/agent"
@@ -623,31 +625,58 @@ func startAgentViaHub(hubCtx *HubContext, agentName, task string, resume bool) e
 			util.Debugf("[env-gather]   needs: %v", resp.EnvGather.Needs)
 		}
 
+		// Resolve agent ID for cleanup in case env-gather is aborted.
+		envGatherAgentID := ""
+		if resp.Agent != nil {
+			envGatherAgentID = resp.Agent.ID
+		}
+		if envGatherAgentID == "" && resp.EnvGather != nil {
+			envGatherAgentID = resp.EnvGather.AgentID
+		}
+
+		// cleanupProvisioningAgent removes a partially-created agent from the Hub.
+		cleanupProvisioningAgent := func() {
+			if envGatherAgentID == "" {
+				return
+			}
+			delCtx, delCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer delCancel()
+			delErr := hubCtx.Client.GroveAgents(groveID).Delete(delCtx, envGatherAgentID, &hubclient.DeleteAgentOptions{
+				DeleteFiles: true,
+			})
+			if delErr != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to clean up provisioning agent %s: %v\n", envGatherAgentID, delErr)
+			} else if debugMode {
+				util.Debugf("[env-gather] cleaned up provisioning agent %s after env-gather failure", envGatherAgentID)
+			}
+		}
+
+		// Install a signal handler so Ctrl+C during interactive prompting
+		// still cleans up the provisioning agent instead of leaving it orphaned.
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+		// Watch for interrupt in the background; clean up and exit if triggered.
+		envGatherDone := make(chan struct{})
+		go func() {
+			select {
+			case <-sigCh:
+				fmt.Fprintln(os.Stderr, "\nInterrupted. Cleaning up provisioning agent...")
+				cleanupProvisioningAgent()
+				os.Exit(130) // 128 + SIGINT(2)
+			case <-envGatherDone:
+				// Normal completion — goroutine exits.
+			}
+		}()
+
 		submitResp, err := gatherAndSubmitEnv(ctx, hubCtx, groveID, resp)
+
+		// Stop the signal handler and goroutine now that env-gather is done.
+		signal.Stop(sigCh)
+		close(envGatherDone)
+
 		if err != nil {
-			// Clean up the provisioning agent on the Hub so it doesn't
-			// linger in a half-created state on the next start attempt.
-			agentID := ""
-			if resp.Agent != nil {
-				agentID = resp.Agent.ID
-			}
-			if agentID == "" && resp.EnvGather != nil {
-				agentID = resp.EnvGather.AgentID
-			}
-			if agentID != "" {
-				delCtx, delCancel := context.WithTimeout(context.Background(), 10*time.Second)
-				defer delCancel()
-				delErr := hubCtx.Client.GroveAgents(groveID).Delete(delCtx, agentID, &hubclient.DeleteAgentOptions{
-					DeleteFiles: true,
-				})
-				if delErr != nil {
-					if debugMode {
-						util.Debugf("[env-gather] failed to clean up provisioning agent %s: %v", agentID, delErr)
-					}
-				} else if debugMode {
-					util.Debugf("[env-gather] cleaned up provisioning agent %s after env-gather failure", agentID)
-				}
-			}
+			cleanupProvisioningAgent()
 			return fmt.Errorf("env-gather failed: %w", err)
 		}
 		// Replace response with the finalized one

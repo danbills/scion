@@ -121,6 +121,13 @@ func LoadConfig() *Config {
 		CloudProvider:      os.Getenv(EnvCloudProvider),
 	}
 
+	// Auto-detect GCP provider when credentials file is present but provider
+	// is not explicitly set. The presence of SCION_OTEL_GCP_CREDENTIALS is a
+	// strong signal that GCP-native export should be used.
+	if cfg.CloudProvider == "" && cfg.GCPCredentialsFile != "" {
+		cfg.CloudProvider = "gcp"
+	}
+
 	// Auto-resolve project ID from GCP credentials file if not explicitly set
 	if cfg.ProjectID == "" && cfg.GCPCredentialsFile != "" {
 		cfg.ProjectID = readProjectIDFromCredentials(cfg.GCPCredentialsFile)

@@ -351,15 +351,51 @@ func TestLoadConfig_ProjectIDFromCredentials(t *testing.T) {
 	tmpFile.WriteString(credJSON)
 	tmpFile.Close()
 
-	// Set credentials file but NOT project ID
+	// Set credentials file but NOT project ID or provider
 	os.Setenv(EnvGCPCredentials, tmpFile.Name())
-	os.Setenv(EnvCloudProvider, "gcp")
 	defer clearTelemetryEnv()
 
 	cfg := LoadConfig()
 
 	if cfg.ProjectID != "creds-project" {
 		t.Errorf("Expected ProjectID auto-resolved from credentials, got %q", cfg.ProjectID)
+	}
+
+	// Provider should also be auto-detected
+	if cfg.CloudProvider != "gcp" {
+		t.Errorf("Expected CloudProvider auto-detected as 'gcp', got %q", cfg.CloudProvider)
+	}
+}
+
+func TestLoadConfig_GCPAutoDetect(t *testing.T) {
+	clearTelemetryEnv()
+
+	// Write a temp credentials file
+	tmpFile, err := os.CreateTemp("", "gcp-creds-*.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	credJSON := `{"type":"service_account","project_id":"auto-project"}`
+	tmpFile.WriteString(credJSON)
+	tmpFile.Close()
+
+	// Only set credentials file - no provider, no project ID, no endpoint
+	os.Setenv(EnvGCPCredentials, tmpFile.Name())
+	defer clearTelemetryEnv()
+
+	cfg := LoadConfig()
+
+	// Should auto-detect GCP mode
+	if !cfg.IsGCP() {
+		t.Error("Expected IsGCP() = true when credentials file is present")
+	}
+	if !cfg.IsCloudConfigured() {
+		t.Error("Expected IsCloudConfigured() = true in auto-detected GCP mode")
+	}
+	if cfg.ProjectID != "auto-project" {
+		t.Errorf("Expected ProjectID = 'auto-project', got %q", cfg.ProjectID)
 	}
 }
 

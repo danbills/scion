@@ -8,8 +8,8 @@
 Add a "Logs" tab to the agent detail page that queries Google Cloud Logging for
 structured log entries associated with a specific agent. Logs are loaded
 on-demand (not on page load), support manual refresh and live streaming, and
-render as expandable structured-JSON rows. A basic `scion logs` CLI
-implementation is also provided for hub-connected agents.
+render as expandable structured-JSON rows. A `scion logs` CLI implementation
+is also provided for hub-connected agents, including `--follow` support.
 
 ## Problem / Current State
 
@@ -20,6 +20,9 @@ implementation is also provided for hub-connected agents.
 - The hub already writes structured logs to Cloud Logging via `CloudHandler`
   (`pkg/util/logging/cloud_handler.go`) with `agent_id` and `grove_id`
   promoted to Cloud Logging labels, making per-agent filtering efficient.
+- Agent-side logs (harness output, tool execution) flow to Cloud Logging via
+  the sciontool exporter, written to a `scion-agents` log. These also carry
+  the `agent_id` label, enabling unified querying across all log sources.
 
 ## Design
 
@@ -61,6 +64,15 @@ GET /api/v1/agents/{agentId}/logs?tail=100&since=<RFC3339>&until=<RFC3339>&sever
 ```
 
 Entries are returned **newest-first** (descending timestamp).
+
+**Authorization:** Access is gated on grove-level read permissions. Any user
+with read access to the grove can view logs for agents in that grove. The hub
+itself and hub admins have access to all logs. This is enforced at the hub API
+layer.
+
+**Graceful degradation:** If Cloud Logging is not configured (no GCP project
+available), the endpoint returns `501 Not Implemented` with a clear message:
+`{"error": "Cloud Logging is not configured"}`.
 
 #### 1.2 SSE Endpoint (Streaming)
 
@@ -143,8 +155,18 @@ AND timestamp < "{until}"
 AND severity >= {severity}
 ```
 
+The query matches across **all logs** in the project with the `agent_id` label —
+it is not scoped to a specific log ID. This ensures both hub-side logs (from
+`CloudHandler`) and agent-side logs (from the sciontool exporter's
+`scion-agents` log) are returned in a unified view.
+
 The `labels.agent_id` filter leverages the label promotion already done by
 `CloudHandler` and `GCPHandler` — this is the most efficient query path.
+
+> **Note:** The `broker_id` should be considered as a candidate for promotion
+> to a primary Cloud Logging label. This would allow filtering by broker in
+> future iterations and provide clear provenance for entries from multi-broker
+> environments.
 
 #### 2.2 Handler Registration
 
@@ -167,7 +189,6 @@ The `LogQueryService` is initialized only when Cloud Logging is available:
 |----------------------------|----------------------------------|----------|
 | `SCION_GCP_PROJECT_ID`     | GCP project for log queries      | Yes (or `GOOGLE_CLOUD_PROJECT`) |
 | `SCION_CLOUD_LOGGING`      | Enables Cloud Logging features   | No (log query can work independently) |
-| `SCION_CLOUD_LOGGING_LOG_ID` | Scopes queries to specific log | No (queries all logs by default) |
 
 Uses Application Default Credentials (ADC), consistent with the existing
 `CloudHandler` pattern. The `logadmin.Client` needs the
@@ -184,6 +205,10 @@ In `web/src/components/pages/agent-detail.ts`, add a third tab to the existing
 <sl-tab slot="nav" panel="logs">Logs</sl-tab>
 <sl-tab-panel name="logs">${this.renderLogsTab()}</sl-tab-panel>
 ```
+
+The Logs tab is **only rendered** when the hub reports that Cloud Logging is
+configured. If Cloud Logging is unavailable, the tab is hidden entirely (no
+error message or disabled state — the feature simply isn't present).
 
 #### 3.2 Lazy Loading
 
@@ -309,23 +334,43 @@ if hubCtx != nil {
 }
 ```
 
-#### 4.2 New Flags
+#### 4.2 Follow Mode
+
+The `--follow` flag opens an HTTP connection to the hub's SSE stream endpoint
+and prints entries as they arrive:
+
+```go
+if followFlag {
+    return hubCtx.Client.GroveAgents(hubCtx.GroveID).StreamCloudLogs(ctx, agentName, opts, func(entry CloudLogEntry) {
+        fmt.Fprintf(os.Stdout, "%s  %s  %s\n", entry.Timestamp.Format(time.RFC3339Nano), entry.Severity, entry.Message)
+    })
+}
+```
+
+The SSE connection is held open until interrupted (Ctrl+C) or the server
+disconnects. On server timeout (10 minutes), the client automatically
+reconnects.
+
+#### 4.3 Flags
 
 | Flag        | Short | Default | Description                      |
 |-------------|-------|---------|----------------------------------|
 | `--tail`    | `-n`  | 100     | Number of lines from end         |
 | `--since`   | —     | —       | Show logs since timestamp/duration (e.g., `1h`, `2026-03-07T10:00:00Z`) |
-| `--follow`  | `-f`  | false   | Stream logs (future enhancement) |
+| `--follow`  | `-f`  | false   | Stream logs in real-time         |
 | `--severity`| —     | —       | Minimum severity level           |
 | `--json`    | —     | false   | Output full JSON entries         |
 
-#### 4.3 Hub Client Extension
+#### 4.4 Hub Client Extension
 
 Add to `AgentService` interface in `pkg/hubclient/agents.go`:
 
 ```go
 // GetCloudLogs retrieves structured log entries from Cloud Logging.
 GetCloudLogs(ctx context.Context, agentID string, opts *GetCloudLogsOptions) (*CloudLogsResponse, error)
+
+// StreamCloudLogs opens an SSE connection for streaming log entries.
+StreamCloudLogs(ctx context.Context, agentID string, opts *GetCloudLogsOptions, handler func(CloudLogEntry)) error
 ```
 
 ```go
@@ -359,11 +404,13 @@ type CloudLogEntry struct {
 
 | Approach | Pros | Cons |
 |----------|------|------|
-| **Cloud Logging (chosen)** | Persists after container stop; labels enable efficient filtering; structured data; works across brokers | Requires GCP; query latency (~1-3s); costs |
+| **Cloud Logging (chosen)** | Persists after container stop; labels enable efficient filtering; structured data; works across brokers; unified view of hub + agent logs | Requires GCP; query latency (~1-3s); costs |
 | **Container runtime logs** (`docker logs`) | No GCP dependency; real-time; works locally | Lost on container delete; broker-specific; unstructured |
 | **Broker-proxied file read** | Simple; works offline | Requires broker connectivity; file access patterns vary |
 
-**Decision:** Cloud Logging is the primary source for hub-connected agents. The
+**Decision:** Cloud Logging is the primary source for hub-connected agents. Both
+hub-side logs (via `CloudHandler`) and agent-side logs (via sciontool exporter)
+carry the `agent_id` label, enabling a unified query across all log sources. The
 existing local `scion logs` (filesystem read) is preserved as fallback for
 non-hub/local-only usage.
 
@@ -407,71 +454,55 @@ known scion fields like `agent_id`, `grove_id`).
 
 #### Phase 1 — Hub API + CLI (Backend)
 1. Add `logadmin` client initialization to hub `Server` (gated on project ID availability)
-2. Implement `LogQueryService` with `Query()` method
+2. Implement `LogQueryService` with `Query()` and `Tail()` methods
 3. Add `GET /api/v1/agents/{id}/logs` handler
-4. Extend `hubclient.AgentService` with `GetCloudLogs()`
-5. Update `cmd/logs.go` to call hub API when hub is available
-6. Add flags: `--tail`, `--since`, `--severity`, `--json`
-7. Tests for filter construction, response mapping, CLI output
+4. Add `GET /api/v1/agents/{id}/logs/stream` SSE handler with server-side polling loop
+5. Extend `hubclient.AgentService` with `GetCloudLogs()` and `StreamCloudLogs()`
+6. Update `cmd/logs.go` to call hub API when hub is available
+7. Add flags: `--tail`, `--since`, `--severity`, `--json`, `--follow`
+8. Implement `--follow` via SSE stream consumption with auto-reconnect
+9. Tests for filter construction, response mapping, CLI output, streaming
 
 #### Phase 2 — Web Logs Tab (Frontend)
-1. Add "Logs" tab to `agent-detail.ts` with lazy loading
-2. Implement log fetch and buffer management
-3. Build compact log row rendering
-4. Add refresh button and loading states
-5. Build `<scion-json-browser>` component
-6. Wire expanded row view
+1. Add capability flag from hub indicating Cloud Logging availability
+2. Conditionally render "Logs" tab in `agent-detail.ts` (hidden when not configured)
+3. Implement log fetch and buffer management with lazy loading
+4. Build compact log row rendering
+5. Add refresh button and loading states
+6. Build `<scion-json-browser>` component
+7. Wire expanded row view
+8. Add stream toggle with SSE connection lifecycle
+9. Disable refresh button during streaming
 
-#### Phase 3 — Streaming
-1. Implement server-side polling loop for `/logs/stream` SSE endpoint
-2. Add stream toggle to web UI
-3. Wire SSE connection lifecycle (connect on toggle, disconnect on tab switch)
-4. Disable refresh button during streaming
-5. (Future) Upgrade to Cloud Logging Tail API
+#### Phase 3 — Optimizations
+1. Upgrade streaming backend to Cloud Logging Tail API
+2. Add `broker_id` as a primary Cloud Logging label for provenance
+3. Add broker-based filtering to the UI and API
 
-## Open Questions
+## Decisions
 
-1. **Log scope — hub server logs only, or also agent/harness logs?**
-   The hub's `CloudHandler` logs server-side events with `agent_id` labels.
-   Agent-side logs (from inside the container, e.g., Claude/Gemini harness
-   output) are written to `agent.log` inside the container and may not flow to
-   Cloud Logging. Should we also query the broker's container logs via the
-   existing `GetLogs` runtime method as a supplementary source? Or ensure
-   agent-side telemetry flows to Cloud Logging via the sciontool exporter?
+Resolved from review feedback:
 
-2. **Multi-broker log aggregation.**
-   An agent may have run on different brokers across restarts. Cloud Logging
-   naturally aggregates across brokers (since it's centralized), but should the
-   API expose which broker produced each entry? The `resource` field may contain
-   this info.
+1. **Log scope:** All cloud logs related to the agent are in scope. Agent-side
+   logs flow to Cloud Logging via the sciontool exporter, so querying all logs
+   with a matching `agent_id` label provides a unified view of both hub-side
+   and agent-side activity.
 
-3. **Log retention and cost.**
-   Cloud Logging has default 30-day retention. Should we document recommended
-   log retention policies? High-volume agents could generate significant log
-   volume.
+2. **Log ID scoping:** Queries are **not** scoped to a specific log ID. All
+   logs in the project with a matching `agent_id` label are returned, ensuring
+   entries from both `scion-server` and `scion-agents` logs are included.
 
-4. **Authorization model for log access.**
-   Who can view an agent's logs? Options:
-   - Anyone with read access to the grove (consistent with agent detail visibility)
-   - Separate `logs:read` permission scope
-   - Recommendation: grove-level read access (simpler, consistent)
+3. **Authorization:** Grove-level read access. Any user who can view the agent
+   detail page can view its logs. The hub API enforces this check. Hub itself
+   and hub admins have unrestricted log access.
 
-5. **Graceful degradation when Cloud Logging is unavailable.**
-   If the hub is running without GCP (local dev, non-GCP deployment), the logs
-   tab should show a clear message: "Cloud Logging is not configured" rather
-   than an error. The API should return `501 Not Implemented` or similar. Should
-   we fall back to broker container logs in this case?
+4. **Graceful degradation:** When Cloud Logging is not configured, the Logs tab
+   is hidden entirely in the web UI. The API returns `501 Not Implemented`.
+   No fallback to container logs or broker-proxied file reads.
 
-6. **Log ID scoping.**
-   Should queries be scoped to the specific `SCION_CLOUD_LOGGING_LOG_ID` (e.g.,
-   `"scion-server"`) or query all logs with matching `agent_id` labels? Scoping
-   to the log ID is more precise but may miss agent-side telemetry written to a
-   different log ID.
-
-7. **`--follow` for CLI.**
-   The CLI `--follow` flag would require holding an HTTP connection open to the
-   hub's SSE stream and printing entries as they arrive. This is straightforward
-   but adds complexity to the initial implementation. Defer to Phase 3?
+5. **Multi-broker aggregation:** Not a concern — Cloud Logging naturally
+   aggregates across brokers. The `broker_id` should be promoted to a primary
+   Cloud Logging label in a future iteration to provide per-entry provenance.
 
 ## Related Files
 

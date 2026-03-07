@@ -199,7 +199,7 @@ This writes to `~/.scion/settings.yaml` (global) or `.scion/settings.yaml` (grov
 
 ## Implementation Plan
 
-### Phase 1: `image_registry` Setting (Core)
+### Phase 1: `image_registry` Setting (Core) ✅ DONE
 
 1. **Add `ImageRegistry` field to `VersionedSettings`** and `V1ProfileConfig`.
    - File: `pkg/config/settings_v1.go`

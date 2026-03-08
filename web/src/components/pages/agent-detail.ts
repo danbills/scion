@@ -50,6 +50,8 @@ import { stateManager } from '../../client/state.js';
 import '../shared/status-badge.js';
 import '../shared/agent-log-viewer.js';
 import type { ScionAgentLogViewer } from '../shared/agent-log-viewer.js';
+import '../shared/agent-message-viewer.js';
+import type { ScionAgentMessageViewer } from '../shared/agent-message-viewer.js';
 
 /**
  * Parse a Go-style duration string (e.g. "2h30m", "1h", "45m", "90s") into
@@ -746,6 +748,10 @@ export class ScionPageAgentDetail extends LitElement {
       const viewer = this.shadowRoot?.querySelector('scion-agent-log-viewer') as ScionAgentLogViewer | null;
       viewer?.loadLogs();
     }
+    if (e.detail.name === 'messages') {
+      const viewer = this.shadowRoot?.querySelector('scion-agent-message-viewer') as ScionAgentMessageViewer | null;
+      viewer?.loadMessages();
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -782,13 +788,15 @@ export class ScionPageAgentDetail extends LitElement {
 
       <sl-tab-group @sl-tab-show=${this.handleTabShow}>
         <sl-tab slot="nav" panel="status">Status</sl-tab>
-        <sl-tab slot="nav" panel="configuration">Configuration</sl-tab>
         ${this.agent.cloudLogging
           ? html`<sl-tab slot="nav" panel="logs">Logs</sl-tab>`
           : nothing}
+        ${this.agent.cloudLogging
+          ? html`<sl-tab slot="nav" panel="messages">Messages</sl-tab>`
+          : nothing}
+        <sl-tab slot="nav" panel="configuration">Configuration</sl-tab>
 
         <sl-tab-panel name="status">${this.renderStatusTab()}</sl-tab-panel>
-        <sl-tab-panel name="configuration">${this.renderConfigurationTab()}</sl-tab-panel>
         ${this.agent.cloudLogging
           ? html`
               <sl-tab-panel name="logs">
@@ -801,6 +809,18 @@ export class ScionPageAgentDetail extends LitElement {
               </sl-tab-panel>
             `
           : nothing}
+        ${this.agent.cloudLogging
+          ? html`
+              <sl-tab-panel name="messages">
+                <scion-agent-message-viewer
+                  agentId=${this.agentId}
+                  agentName=${this.agent.name || ''}
+                  ?canSend=${can(this.agent._capabilities, 'message')}
+                ></scion-agent-message-viewer>
+              </sl-tab-panel>
+            `
+          : nothing}
+        <sl-tab-panel name="configuration">${this.renderConfigurationTab()}</sl-tab-panel>
       </sl-tab-group>
     `;
   }

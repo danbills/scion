@@ -100,6 +100,51 @@ func TestBuildLogFilter(t *testing.T) {
 	}
 }
 
+func TestBuildLogFilter_LogID(t *testing.T) {
+	tests := []struct {
+		name      string
+		opts      LogQueryOptions
+		projectID string
+		expected  string
+	}{
+		{
+			name: "logID with project ID",
+			opts: LogQueryOptions{
+				AgentID: "agent-123",
+				LogID:   "scion-messages",
+			},
+			projectID: "my-project",
+			expected:  `logName = "projects/my-project/logs/scion-messages" AND labels.agent_id = "agent-123"`,
+		},
+		{
+			name: "logID without project ID",
+			opts: LogQueryOptions{
+				AgentID: "agent-123",
+				LogID:   "scion-messages",
+			},
+			projectID: "",
+			expected:  `labels.agent_id = "agent-123"`,
+		},
+		{
+			name: "no logID with project ID",
+			opts: LogQueryOptions{
+				AgentID: "agent-123",
+			},
+			projectID: "my-project",
+			expected:  `labels.agent_id = "agent-123"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := BuildLogFilter(tt.opts, tt.projectID)
+			if result != tt.expected {
+				t.Errorf("BuildLogFilter() = %q, want %q", result, tt.expected)
+			}
+		})
+	}
+}
+
 func TestConvertLogEntry(t *testing.T) {
 	t.Run("string payload", func(t *testing.T) {
 		ts := time.Date(2026, 3, 7, 10, 15, 32, 0, time.UTC)

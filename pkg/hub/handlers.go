@@ -1064,6 +1064,16 @@ func (s *Server) handleAgentByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Handle message-logs (GET endpoints for message audit log)
+	if action == "message-logs" {
+		s.handleAgentMessageLogs(w, r, id)
+		return
+	}
+	if action == "message-logs/stream" {
+		s.handleAgentMessageLogsStream(w, r, id)
+		return
+	}
+
 	// Handle actions
 	if action != "" {
 		s.handleAgentAction(w, r, id, action)
@@ -3060,6 +3070,21 @@ func (s *Server) handleGroveAgentAction(w http.ResponseWriter, r *http.Request, 
 			s.handleAgentCloudLogs(w, r, resolvedAgent.ID)
 		} else {
 			s.handleAgentCloudLogsStream(w, r, resolvedAgent.ID)
+		}
+		return
+	}
+
+	// Message-logs actions are GET endpoints; handle before the POST-only gate.
+	if action == "message-logs" || action == "message-logs/stream" {
+		resolvedAgent, err := s.resolveGroveAgent(r.Context(), groveID, agentID)
+		if err != nil {
+			writeErrorFromErr(w, err, "")
+			return
+		}
+		if action == "message-logs" {
+			s.handleAgentMessageLogs(w, r, resolvedAgent.ID)
+		} else {
+			s.handleAgentMessageLogsStream(w, r, resolvedAgent.ID)
 		}
 		return
 	}

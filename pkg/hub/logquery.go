@@ -63,6 +63,7 @@ type LogQueryOptions struct {
 	AgentID   string
 	GroveID   string
 	BrokerID  string
+	LogID     string // Cloud Logging log ID (e.g. "scion-messages"); empty = default log
 	Tail      int
 	Since     time.Time
 	Until     time.Time
@@ -117,7 +118,7 @@ func (s *LogQueryService) Close() error {
 
 // Query returns log entries matching the given options.
 func (s *LogQueryService) Query(ctx context.Context, opts LogQueryOptions) (*LogQueryResult, error) {
-	filter := BuildLogFilter(opts)
+	filter := BuildLogFilter(opts, s.projectID)
 
 	tail := opts.Tail
 	if tail <= 0 {
@@ -152,9 +153,14 @@ func (s *LogQueryService) Query(ctx context.Context, opts LogQueryOptions) (*Log
 }
 
 // BuildLogFilter constructs a Cloud Logging filter string from the options.
-func BuildLogFilter(opts LogQueryOptions) string {
+// When projectID is provided and opts.LogID is set, a logName filter is added
+// to restrict results to the specific Cloud Logging log.
+func BuildLogFilter(opts LogQueryOptions, projectID ...string) string {
 	var parts []string
 
+	if opts.LogID != "" && len(projectID) > 0 && projectID[0] != "" {
+		parts = append(parts, fmt.Sprintf(`logName = "projects/%s/logs/%s"`, projectID[0], opts.LogID))
+	}
 	if opts.AgentID != "" {
 		parts = append(parts, fmt.Sprintf(`labels.agent_id = %q`, opts.AgentID))
 	}
@@ -239,7 +245,7 @@ func ConvertLogEntry(entry *gcplog.Entry) CloudLogEntry {
 // It sends matching log entries to the returned channel. The caller must call
 // the returned cancel function to stop the stream and release resources.
 func (s *LogQueryService) Tail(ctx context.Context, opts LogQueryOptions) (<-chan CloudLogEntry, func(), error) {
-	filter := BuildLogFilter(opts)
+	filter := BuildLogFilter(opts, s.projectID)
 
 	stream, err := s.tailClient.TailLogEntries(ctx)
 	if err != nil {

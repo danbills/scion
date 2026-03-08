@@ -158,6 +158,68 @@ func TestHandleAgentCloudLogs_QueryParameterParsing(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Message-logs endpoint tests
+// ---------------------------------------------------------------------------
+
+func TestHandleAgentMessageLogs_NotConfigured(t *testing.T) {
+	srv, s := testServerNoCloudLogs(t)
+	agent := createTestAgent(t, s)
+
+	req := httptest.NewRequest("GET", "/api/v1/agents/"+agent.ID+"/message-logs", nil)
+	req.Header.Set("Authorization", "Bearer "+testDevToken)
+	w := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotImplemented {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusNotImplemented)
+	}
+
+	var resp struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if resp.Error.Message != "Cloud Logging is not configured" {
+		t.Errorf("message = %q, want %q", resp.Error.Message, "Cloud Logging is not configured")
+	}
+}
+
+func TestHandleAgentMessageLogsStream_NotConfigured(t *testing.T) {
+	srv, s := testServerNoCloudLogs(t)
+	agent := createTestAgent(t, s)
+
+	req := httptest.NewRequest("GET", "/api/v1/agents/"+agent.ID+"/message-logs/stream", nil)
+	req.Header.Set("Authorization", "Bearer "+testDevToken)
+	w := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotImplemented {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusNotImplemented)
+	}
+}
+
+func TestHandleAgentMessageLogs_MethodNotAllowed(t *testing.T) {
+	srv, s := testServerNoCloudLogs(t)
+	agent := createTestAgent(t, s)
+
+	req := httptest.NewRequest("POST", "/api/v1/agents/"+agent.ID+"/message-logs", nil)
+	req.Header.Set("Authorization", "Bearer "+testDevToken)
+	w := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusMethodNotAllowed)
+	}
+}
+
 func TestHandleAgentCloudLogs_Unauthenticated(t *testing.T) {
 	srv, s := testServerNoCloudLogs(t)
 	agent := createTestAgent(t, s)

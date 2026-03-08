@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/ptone/scion-agent/pkg/store"
+	"github.com/ptone/scion-agent/pkg/util/logging"
 )
 
 // handleAgentCloudLogs handles GET /api/v1/agents/{id}/cloud-logs
@@ -182,6 +183,166 @@ func (s *Server) handleAgentCloudLogsStream(w http.ResponseWriter, r *http.Reque
 		case entry, ok := <-tailCh:
 			if !ok {
 				// Tail stream closed
+				return
+			}
+			data, err := json.Marshal(entry)
+			if err != nil {
+				continue
+			}
+			fmt.Fprintf(w, "event: log\ndata: %s\n\n", data)
+			flusher.Flush()
+		case <-heartbeat.C:
+			fmt.Fprintf(w, ":heartbeat %d\n\n", time.Now().UnixMilli())
+			flusher.Flush()
+		case <-timeout.C:
+			fmt.Fprintf(w, "event: timeout\ndata: {\"message\":\"stream timeout, please reconnect\"}\n\n")
+			flusher.Flush()
+			return
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// handleAgentMessageLogs handles GET /api/v1/agents/{id}/message-logs
+// and GET /api/v1/groves/{groveId}/agents/{agentId}/message-logs
+// It queries the dedicated "scion-messages" Cloud Logging log for message
+// entries associated with the given agent.
+func (s *Server) handleAgentMessageLogs(w http.ResponseWriter, r *http.Request, agentID string) {
+	if r.Method != http.MethodGet {
+		MethodNotAllowed(w)
+		return
+	}
+
+	if s.logQueryService == nil {
+		writeError(w, http.StatusNotImplemented, "not_implemented",
+			"Cloud Logging is not configured", nil)
+		return
+	}
+
+	ctx := r.Context()
+
+	agent, err := s.store.GetAgent(ctx, agentID)
+	if err != nil {
+		writeErrorFromErr(w, err, "")
+		return
+	}
+
+	if userIdent := GetUserIdentityFromContext(ctx); userIdent != nil {
+		decision := s.authzService.CheckAccess(ctx, userIdent, agentResource(agent), ActionRead)
+		if !decision.Allowed {
+			writeError(w, http.StatusForbidden, ErrCodeForbidden, "Access denied", nil)
+			return
+		}
+	}
+	if agentIdent := GetAgentIdentityFromContext(ctx); agentIdent != nil {
+		if agent.GroveID != agentIdent.GroveID() {
+			NotFound(w, "Agent")
+			return
+		}
+	}
+
+	query := r.URL.Query()
+	opts := LogQueryOptions{
+		AgentID: agent.ID,
+		GroveID: agent.GroveID,
+		LogID:   logging.MessageLogID,
+	}
+
+	if v := query.Get("tail"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			opts.Tail = n
+		}
+	}
+	if v := query.Get("since"); v != "" {
+		if t, err := time.Parse(time.RFC3339Nano, v); err == nil {
+			opts.Since = t
+		}
+	}
+	if v := query.Get("until"); v != "" {
+		if t, err := time.Parse(time.RFC3339Nano, v); err == nil {
+			opts.Until = t
+		}
+	}
+
+	result, err := s.logQueryService.Query(ctx, opts)
+	if err != nil {
+		slog.Error("message log query failed", "agentID", agentID, "error", err)
+		writeError(w, http.StatusInternalServerError, ErrCodeInternalError,
+			"Failed to query message logs", nil)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+// handleAgentMessageLogsStream handles GET /api/v1/agents/{id}/message-logs/stream
+// and GET /api/v1/groves/{groveId}/agents/{agentId}/message-logs/stream
+// It returns an SSE stream of message log entries from the "scion-messages" log.
+func (s *Server) handleAgentMessageLogsStream(w http.ResponseWriter, r *http.Request, agentID string) {
+	if r.Method != http.MethodGet {
+		MethodNotAllowed(w)
+		return
+	}
+
+	if s.logQueryService == nil {
+		writeError(w, http.StatusNotImplemented, "not_implemented",
+			"Cloud Logging is not configured", nil)
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	ctx := r.Context()
+
+	agent, err := s.store.GetAgent(ctx, agentID)
+	if err != nil {
+		writeErrorFromErr(w, err, "")
+		return
+	}
+
+	if userIdent := GetUserIdentityFromContext(ctx); userIdent != nil {
+		decision := s.authzService.CheckAccess(ctx, userIdent, agentResource(agent), ActionRead)
+		if !decision.Allowed {
+			writeError(w, http.StatusForbidden, ErrCodeForbidden, "Access denied", nil)
+			return
+		}
+	}
+
+	opts := LogQueryOptions{
+		AgentID: agent.ID,
+		LogID:   logging.MessageLogID,
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	flusher.Flush()
+
+	tailCh, tailCancel, err := s.logQueryService.Tail(ctx, opts)
+	if err != nil {
+		slog.Error("failed to open message log tail stream", "agentID", agentID, "error", err)
+		fmt.Fprintf(w, "event: error\ndata: {\"message\":\"failed to open message log stream\"}\n\n")
+		flusher.Flush()
+		return
+	}
+	defer tailCancel()
+
+	heartbeat := time.NewTicker(15 * time.Second)
+	defer heartbeat.Stop()
+
+	timeout := time.NewTimer(10 * time.Minute)
+	defer timeout.Stop()
+
+	for {
+		select {
+		case entry, ok := <-tailCh:
+			if !ok {
 				return
 			}
 			data, err := json.Marshal(entry)

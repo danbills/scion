@@ -36,6 +36,8 @@ import (
 	"github.com/ptone/scion-agent/pkg/util/logging"
 	"github.com/ptone/scion-agent/pkg/version"
 	"github.com/ptone/scion-agent/web"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 )
 
 // HealthProvider is a function that returns the health info for a component.
@@ -1458,17 +1460,26 @@ func (ws *WebServer) buildHandler() http.Handler {
 }
 
 // Start starts the web frontend HTTP server.
+// The server uses h2c (HTTP/2 cleartext) so browsers can multiplex all
+// requests over a single TCP connection without TLS. This prevents the
+// HTTP/1.1 six-connection-per-origin limit from blocking requests behind
+// long-lived SSE streams. When deployed behind a TLS-terminating reverse
+// proxy (e.g. Caddy), the proxy negotiates HTTP/2 with the browser natively.
 func (ws *WebServer) Start(ctx context.Context) error {
 	handler := ws.buildHandler()
 
+	// Wrap the handler with h2c to support HTTP/2 cleartext upgrades.
+	h2s := &http2.Server{}
+	h2cHandler := h2c.NewHandler(handler, h2s)
+
 	ws.httpServer = &http.Server{
 		Addr:         fmt.Sprintf("%s:%d", ws.config.Host, ws.config.Port),
-		Handler:      handler,
+		Handler:      h2cHandler,
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 60 * time.Second,
 	}
 
-	slog.Info("Web frontend server starting", "host", ws.config.Host, "port", ws.config.Port)
+	slog.Info("Web frontend server starting", "host", ws.config.Host, "port", ws.config.Port, "h2c", true)
 
 	errCh := make(chan error, 1)
 	go func() {

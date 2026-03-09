@@ -30,6 +30,9 @@ const (
 
 // FindProjectRoot walks up the directory tree to find the .scion directory or marker file.
 // When .scion is a file (grove marker), it resolves to the external grove-config path.
+// In hub context (SCION_HUB_ENDPOINT set), if no .scion is found on the filesystem,
+// returns a synthetic path based on CWD so that settings loading can proceed using
+// environment variables for hub connectivity.
 func FindProjectRoot() (string, bool) {
 	wd, err := os.Getwd()
 	if err != nil {
@@ -51,6 +54,13 @@ func FindProjectRoot() (string, bool) {
 			if resolved, err := ResolveGroveMarker(p); err == nil {
 				return resolved, true
 			}
+			// Marker file exists but external path can't be resolved
+			// (e.g., inside a container where ~/.scion/grove-configs/ doesn't exist).
+			// In hub context, return a synthetic path — the CLI will use the
+			// Hub API and env vars rather than filesystem-based grove data.
+			if IsHubContext() {
+				return filepath.Join(filepath.Dir(p), DotScion), true
+			}
 		}
 
 		parent := filepath.Dir(dir)
@@ -59,6 +69,15 @@ func FindProjectRoot() (string, bool) {
 		}
 		dir = parent
 	}
+
+	// Hub context fallback: if hub endpoint is available via env vars,
+	// the CLI is running inside a hub-connected container. Return a
+	// synthetic .scion path so that settings loading proceeds using
+	// env vars (SCION_HUB_ENDPOINT, SCION_GROVE_ID, etc.) for hub connectivity.
+	if IsHubContext() {
+		return filepath.Join(wd, DotScion), true
+	}
+
 	return "", false
 }
 

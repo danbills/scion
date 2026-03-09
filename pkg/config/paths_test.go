@@ -184,6 +184,9 @@ func TestRequireGrovePath_NoProjectError(t *testing.T) {
 	os.Setenv("HOME", tmpHome)
 	defer os.Setenv("HOME", origHome)
 
+	// Ensure no hub context
+	t.Setenv("SCION_HUB_ENDPOINT", "")
+
 	if err := os.Chdir(tmpDir); err != nil {
 		t.Fatal(err)
 	}
@@ -197,6 +200,120 @@ func TestRequireGrovePath_NoProjectError(t *testing.T) {
 	// Error message should suggest --global
 	if !containsSubstring(err.Error(), "--global") && !containsSubstring(err.Error(), "global") {
 		t.Errorf("error should suggest using --global, got: %v", err)
+	}
+}
+
+func TestRequireGrovePath_HubContextFallback(t *testing.T) {
+	// When SCION_HUB_ENDPOINT is set and no .scion exists,
+	// RequireGrovePath should succeed (hub context fallback).
+	tmpDir := t.TempDir()
+
+	origWd, _ := os.Getwd()
+	defer os.Chdir(origWd)
+
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	t.Setenv("SCION_HUB_ENDPOINT", "http://hub.example.com")
+
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatal(err)
+	}
+
+	got, _, err := RequireGrovePath("")
+	if err != nil {
+		t.Fatalf("expected no error in hub context, got: %v", err)
+	}
+
+	// Should return a synthetic .scion path under CWD
+	expected := filepath.Join(tmpDir, DotScion)
+	if got != expected {
+		t.Errorf("RequireGrovePath() = %q, want %q", got, expected)
+	}
+}
+
+func TestFindProjectRoot_HubContextNoScion(t *testing.T) {
+	// When SCION_HUB_ENDPOINT is set and no .scion exists anywhere,
+	// FindProjectRoot should return a synthetic path.
+	tmpDir := t.TempDir()
+
+	origWd, _ := os.Getwd()
+	defer os.Chdir(origWd)
+
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	t.Setenv("SCION_HUB_ENDPOINT", "http://hub.example.com")
+
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatal(err)
+	}
+
+	got, found := FindProjectRoot()
+	if !found {
+		t.Fatal("expected FindProjectRoot to succeed in hub context")
+	}
+
+	expected := filepath.Join(tmpDir, DotScion)
+	if got != expected {
+		t.Errorf("FindProjectRoot() = %q, want %q", got, expected)
+	}
+}
+
+func TestFindProjectRoot_HubContextNoScion_Disabled(t *testing.T) {
+	// Without SCION_HUB_ENDPOINT, FindProjectRoot should still fail
+	// when no .scion exists.
+	tmpDir := t.TempDir()
+
+	origWd, _ := os.Getwd()
+	defer os.Chdir(origWd)
+
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	t.Setenv("SCION_HUB_ENDPOINT", "")
+
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatal(err)
+	}
+
+	_, found := FindProjectRoot()
+	if found {
+		t.Fatal("expected FindProjectRoot to fail without hub context")
+	}
+}
+
+func TestFindProjectRoot_MarkerWithHubFallback(t *testing.T) {
+	// When a .scion marker file exists but the external grove-configs path
+	// doesn't, and hub context is available, FindProjectRoot should succeed.
+	tmpDir := t.TempDir()
+
+	origWd, _ := os.Getwd()
+	defer os.Chdir(origWd)
+
+	// Set HOME to a dir where grove-configs won't exist
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	t.Setenv("SCION_HUB_ENDPOINT", "http://hub.example.com")
+
+	// Write a valid marker file
+	marker := &GroveMarker{
+		GroveID:   "test-grove-id-1234",
+		GroveName: "test-project",
+		GroveSlug: "test-project",
+	}
+	WriteGroveMarker(filepath.Join(tmpDir, ".scion"), marker)
+
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatal(err)
+	}
+
+	got, found := FindProjectRoot()
+	if !found {
+		t.Fatal("expected FindProjectRoot to succeed with marker + hub context")
+	}
+
+	// Should resolve to the external grove path (constructed but not existing)
+	externalPath, _ := marker.ExternalGrovePath()
+	if got != externalPath {
+		t.Errorf("FindProjectRoot() = %q, want %q", got, externalPath)
 	}
 }
 

@@ -359,6 +359,64 @@ func TestGetAgentHomePath_NoGroveID(t *testing.T) {
 	}
 }
 
+func TestIsHubContext(t *testing.T) {
+	// Without SCION_HUB_ENDPOINT, IsHubContext should return false
+	t.Setenv("SCION_HUB_ENDPOINT", "")
+	if IsHubContext() {
+		t.Error("expected IsHubContext() = false when SCION_HUB_ENDPOINT is empty")
+	}
+
+	// With SCION_HUB_ENDPOINT set, IsHubContext should return true
+	t.Setenv("SCION_HUB_ENDPOINT", "http://hub.example.com")
+	if !IsHubContext() {
+		t.Error("expected IsHubContext() = true when SCION_HUB_ENDPOINT is set")
+	}
+}
+
+func TestWriteWorkspaceMarker(t *testing.T) {
+	tmpDir := t.TempDir()
+	workspaceDir := filepath.Join(tmpDir, "workspace")
+	os.MkdirAll(workspaceDir, 0755)
+
+	err := WriteWorkspaceMarker(workspaceDir, "grove-id-123", "my-project", "my-project")
+	if err != nil {
+		t.Fatalf("WriteWorkspaceMarker failed: %v", err)
+	}
+
+	// Read back the marker
+	markerPath := filepath.Join(workspaceDir, ".scion")
+	marker, err := ReadGroveMarker(markerPath)
+	if err != nil {
+		t.Fatalf("ReadGroveMarker failed: %v", err)
+	}
+
+	if marker.GroveID != "grove-id-123" {
+		t.Errorf("GroveID = %q, want %q", marker.GroveID, "grove-id-123")
+	}
+	if marker.GroveName != "my-project" {
+		t.Errorf("GroveName = %q, want %q", marker.GroveName, "my-project")
+	}
+	if marker.GroveSlug != "my-project" {
+		t.Errorf("GroveSlug = %q, want %q", marker.GroveSlug, "my-project")
+	}
+}
+
+func TestWriteWorkspaceMarker_MissingRequiredFields(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Missing grove-id
+	err := WriteWorkspaceMarker(tmpDir, "", "name", "slug")
+	if err == nil {
+		t.Error("expected error when grove-id is empty")
+	}
+
+	// Missing grove-slug
+	err = WriteWorkspaceMarker(tmpDir, "id", "name", "")
+	if err == nil {
+		t.Error("expected error when grove-slug is empty")
+	}
+}
+
 func TestGetGroveName_ExternalDir(t *testing.T) {
 	// Test that GetGroveName extracts the slug from external directory names
 	tests := []struct {

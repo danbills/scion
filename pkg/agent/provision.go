@@ -356,6 +356,17 @@ func ProvisionAgent(ctx context.Context, agentName string, templateName string, 
 		if err := util.CreateWorktree(agentWorkspace, worktreeBranch); err != nil {
 			return "", "", nil, fmt.Errorf("failed to create git worktree: %w", err)
 		}
+
+		// Write a .scion grove marker into the worktree so in-container CLI
+		// can discover the grove context. Worktrees don't contain .scion
+		// (it's gitignored), so without this marker the CLI would report
+		// "not in a scion project" inside the container.
+		if groveID, err := config.ReadGroveID(projectDir); err == nil && groveID != "" {
+			groveSlug := api.Slugify(groveName)
+			if writeErr := config.WriteWorkspaceMarker(agentWorkspace, groveID, groveName, groveSlug); writeErr != nil {
+				util.Debugf("provision: failed to write workspace marker: %v", writeErr)
+			}
+		}
 	}
 
 	// 2. Load templates and merge configs (no home copy yet)

@@ -135,6 +135,29 @@ func IsOldStyleNonGitGrove(scionPath string) bool {
 	return true
 }
 
+// IsHubContext returns true if hub context environment variables are available,
+// indicating the CLI is running inside a hub-connected agent container where
+// grove data should be accessed via the Hub API rather than the local filesystem.
+func IsHubContext() bool {
+	return os.Getenv("SCION_HUB_ENDPOINT") != ""
+}
+
+// WriteWorkspaceMarker writes a minimal .scion marker file into a workspace
+// directory so that in-container CLI can discover the grove context.
+// This is called during agent provisioning for git groves (where the worktree
+// doesn't contain .scion because it's gitignored) and for hub-native groves.
+func WriteWorkspaceMarker(workspacePath string, groveID, groveName, groveSlug string) error {
+	if groveID == "" || groveSlug == "" {
+		return fmt.Errorf("grove-id and grove-slug are required for workspace marker")
+	}
+	marker := &GroveMarker{
+		GroveID:   groveID,
+		GroveName: groveName,
+		GroveSlug: groveSlug,
+	}
+	return WriteGroveMarker(filepath.Join(workspacePath, DotScion), marker)
+}
+
 // ExtractSlugFromExternalDir extracts the grove slug from an external
 // grove-config directory name in the format "slug__shortuuid".
 func ExtractSlugFromExternalDir(dirName string) string {

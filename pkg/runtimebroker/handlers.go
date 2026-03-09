@@ -748,6 +748,14 @@ func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 
 		opts.Workspace = workspaceDir
 		opts.GrovePath = "" // Prevent git worktree logic in ProvisionAgent
+
+		// Write a .scion grove marker into the workspace so in-container CLI
+		// can discover the grove context and use the Hub API.
+		if req.GroveID != "" && req.GroveSlug != "" {
+			if writeErr := config.WriteWorkspaceMarker(workspaceDir, req.GroveID, req.GroveSlug, req.GroveSlug); writeErr != nil {
+				s.agentLifecycleLog.Warn("Failed to write workspace marker", "error", writeErr)
+			}
+		}
 	}
 
 	mgr := s.resolveManagerForOpts(opts)

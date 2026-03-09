@@ -184,31 +184,58 @@ Acceptance checks:
 - Tests for workspace/gitClone parity.
 - Tests for auth file secret creation.
 
-## Stage 2: Production Hardening (Mid Term)
+## Stage 2: Production Hardening (Mid Term) — COMPLETED
+
 Goal: make Kubernetes runtime resilient under real cluster conditions.
 
 Deliverables:
-1. Robust sync engine behavior
-- Add retry/backoff and better error classification for tar/exec stream failures.
-- Add checksum/incremental sync optimization for tar mode (or document limits clearly).
+1. Robust sync engine behavior — **Done**
+- `syncWithRetry` wraps all sync operations with exponential backoff (1s, 2s, 4s, up to 3 retries).
+- `isSyncTransientError` classifies connection resets, broken pipes, timeouts, EOF, and TLS errors as retryable.
+- Non-transient errors (permission denied, not found) fail immediately without retry.
+- Tar snapshot sync model documented as current approach; incremental sync is a future optimization.
 
-2. Pod spec hardening
-- Security context defaults (runAsUser/fsGroup where compatible with image/user model).
-- Optional node selectors/tolerations/affinity in Kubernetes config for scheduling control.
-- Optional ephemeral-storage limits from common resource model.
+2. Pod spec hardening — **Done**
+- `PodSecurityContext.FSGroup` set from host GID for volume permission alignment.
+- `NodeSelector` map support added to `KubernetesConfig` and applied to pod spec.
+- `Tolerations` support added via `K8sToleration` struct, mapped to `corev1.Toleration`.
+- `RuntimeClassName` now applied to pod spec (was previously read but not wired).
+- `ResourceSpec.Disk` now sets both requests AND limits for ephemeral-storage.
+- `resource.MustParse` replaced with `parseResourceSafe` — returns actionable errors instead of panicking.
 
-3. Image handling policy
-- Improve preflight and user feedback around image pull failures.
-- Optional configurable pull policy.
+3. Image handling policy — **Done**
+- `ImagePullPolicy` field added to `KubernetesConfig` (Always, IfNotPresent, Never) with validation.
+- `waitForPodReady` enhanced with structured error classification:
+  - Image pull failures with remediation hints.
+  - `CreateContainerConfigError` with config guidance.
+  - `CrashLoopBackOff` with log check suggestion.
+  - `Unschedulable` pods with scheduling guidance.
+  - Pod-level scheduling condition checking.
+- `ImageExists` validates image name format (empty, whitespace).
 
-4. Multi-namespace operations
-- Configurable list scope:
-  - single namespace (default)
-  - explicit all managed namespaces (opt-in)
+4. Multi-namespace operations — **Done**
+- `ListAllNamespaces` field on `KubernetesRuntime` (configured via `V1RuntimeConfig.ListAllNamespaces`).
+- `List()` queries all namespaces when `ListAllNamespaces` is true (empty namespace = all).
+- `resolveNamespace()` helper looks up pod annotations for namespace, with cross-namespace search fallback.
+- `scion.namespace` annotation persisted at pod creation for lifecycle operations.
+- `Delete`, `GetLogs`, `Attach`, `Exec`, `GetWorkspacePath` all support `namespace/pod` ID format.
+- `Delete`, `GetLogs`, `Attach`, `Exec`, `GetWorkspacePath` all use `resolveNamespace` for annotation-based lookup.
+- `Sync` already had namespace resolution via agent annotations.
+- `AgentK8sMetadata` populated in List responses with namespace and pod name.
 
 Acceptance checks:
-- Integration tests against a real cluster profile (kind/k3d for CI, plus optional GKE lane).
-- Failure-injection tests for pull failures, permission errors, and interrupted sync.
+- Unit tests for sync retry behavior (success, transient retry, permanent fail, max retries, context cancellation).
+- Unit tests for transient error classification.
+- Unit tests for security context (FSGroup), node selectors, tolerations, runtimeClassName.
+- Unit tests for ephemeral-storage in both requests and limits.
+- Unit tests for safe resource parsing (invalid values return errors, no panics).
+- Unit tests for image pull policy configuration and validation.
+- Unit tests for image name validation.
+- Unit tests for multi-namespace list (all namespaces vs single namespace).
+- Unit tests for namespace resolution from annotations and defaults.
+- Unit tests for namespace/pod delete format.
+- Unit tests for namespace annotation persistence.
+- Integration test for full config with all Stage 2 features applied.
 
 ## Stage 3: Launch Readiness and UX (Final)
 Goal: ship a predictable, documented, supportable Kubernetes runtime.

@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/ptone/scion-agent/pkg/api"
 	"github.com/ptone/scion-agent/pkg/k8s"
@@ -709,6 +708,3 @@ func TestBuildPod_ReturnsError(t *testing.T) {
 		t.Fatal("expected non-nil pod")
 	}
 }
-
-// suppress unused import warning
-var _ = time.Second

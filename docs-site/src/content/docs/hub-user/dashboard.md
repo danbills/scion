@@ -20,8 +20,10 @@ View and manage your registered groves.
 
 ### Agents
 Detailed view for individual agents.
-- **Status Monitoring**: Real-time view of agent lifecycle (Starting, Thinking, Waiting, etc.).
-- **Logs**: Streamed logs from the agent container.
+- **Status Monitoring**: Real-time view of agent lifecycle (Starting, Thinking, Waiting, etc.). Includes **stalled agent detection** to flag agents that have stopped responding.
+- **Logs**: Streamed logs from the agent container via the integrated Cloud Log Viewer.
+- **Messages**: A dedicated tab for viewing structured messages sent to and from the agent.
+- **Debug Panel**: A full-height panel providing a real-time stream of SSE events and internal state transitions for advanced troubleshooting and observability.
 - **Terminal (Upcoming)**: Interactive terminal access to the agent's workspace.
 - **Lifecycle Control**: Start, stop, restart, or delete agents from the UI.
 

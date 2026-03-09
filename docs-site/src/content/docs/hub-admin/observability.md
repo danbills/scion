@@ -130,6 +130,10 @@ These harness-specific env vars are injected at agent start time via the harness
 
 Agent logs are written to `/home/scion/agent.log` inside the container. The sciontool logging system writes to both stderr and this file.
 
+### Cloud Log Viewer & Hub API
+
+Scion provides a built-in Cloud Log Viewer in the Web UI to stream agent logs in real-time. This is backed by the Hub API, which retrieves logs directly from the active runtime broker or from the persisted `agent.log` file, ensuring comprehensive visibility into agent execution regardless of its current state.
+
 ### Log Ownership and Permissions
 
 The `sciontool` utility ensures that `agent.log` is owned by the `scion` user during initialization, even if `sciontool` is initially run as root. The log file is created with permissive `0666` permissions to ensure multiple processes can contribute to the log stream.
@@ -355,6 +359,22 @@ severity = DEBUG
 :::tip
 Create **saved queries** in the Cloud Logging console for subsystem filters you use frequently. For alerting, use log-based metrics with a filter like `jsonPayload.subsystem = "hub.notifications" AND severity >= ERROR` to trigger alerts on notification dispatch failures.
 :::
+
+## Structured Messaging Pipeline
+
+Scion includes a comprehensive structured messaging pipeline that provides reliable delivery of messages to and from agents. This pipeline is fully observable:
+
+- **Hub API Integration**: Messages can be sent and retrieved via the new Hub API, allowing external systems to programmatically interact with agents.
+- **Web UI "Messages" Tab**: An interactive interface in the dashboard allows administrators and users to trace message flows in real-time.
+- **Multi-Stage Broker Adapter**: Ensures robust delivery of messages to the agent containers, including external notifications. You can monitor message flow health in logs using the `hub.messages` and `broker.messages` subsystems.
+
+## Stalled Agent Detection
+
+The Hub includes an automated monitoring system to detect "zombie" or stalled agents. This system tracks the heartbeat signals emitted by runtime brokers.
+
+- **Heartbeat Timeout**: If an agent stops responding and fails to emit a heartbeat within the configured `StalledThreshold`, it is automatically transitioned to a `STALLED` state.
+- **Notifications**: Stalled events can trigger automated browser push notifications (by default, `stalled` and `error` states are included in the default notification triggers), proactively alerting administrators to health issues.
+- **Visibility**: The Web UI clearly flags stalled agents with specialized status badges, ensuring they are not lost among active workloads.
 
 ## Troubleshooting for Admins
 

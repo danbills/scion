@@ -23,7 +23,7 @@ Users can manually configure volume mounts in `settings.yaml` to achieve this, b
 
 1. **Grove-scoped**: Shared directories belong to a grove and are available to all agents within it.
 2. **Named by slug**: Each shared directory is identified by a simple slug (e.g., `build-cache`, `artifacts`, `shared-context`).
-3. **Leverage existing infrastructure**: Use the existing `VolumeMount` / `Volumes` config and runtime mount machinery.
+3. **Leverage existing infrastructure**: Use the existing `VolumeMount` / `Volumes` config and runtime mount machinery. Shared dirs are internally represented as synthesized `VolumeMount` entries — no runtime code changes needed.
 4. **Deterministic mount paths**: Agents should find shared directories at a well-known, predictable location.
 5. **Runtime-portable**: Work across Docker, Podman, Apple container, and Kubernetes (with appropriate adaptation).
 6. **Minimal configuration**: Declaring a shared directory at the grove level should be sufficient — agents should not need per-agent volume config.
@@ -40,8 +40,10 @@ shared_dirs:
   - name: build-cache
     read_only: false
   - name: shared-context
-    read_only: true    # agents get read-only access by default
+    read_only: true           # agents get read-only access by default
   - name: artifacts
+  - name: workspace-cache
+    in_workspace: true        # mount inside the workspace tree instead of /scion-volumes
 ```
 
 ### Go Types
@@ -49,8 +51,9 @@ shared_dirs:
 ```go
 // SharedDir defines a grove-level shared directory available to all agents.
 type SharedDir struct {
-    Name     string `json:"name" yaml:"name"`         // Slug identifier (e.g., "build-cache")
-    ReadOnly bool   `json:"read_only,omitempty" yaml:"read_only,omitempty"` // Default access mode
+    Name        string `json:"name" yaml:"name"`                                   // Slug identifier (e.g., "build-cache")
+    ReadOnly    bool   `json:"read_only,omitempty" yaml:"read_only,omitempty"`      // Default access mode
+    InWorkspace bool   `json:"in_workspace,omitempty" yaml:"in_workspace,omitempty"` // Mount inside workspace instead of /scion-volumes
 }
 ```
 
@@ -58,7 +61,7 @@ The `Name` field must be a valid slug: lowercase alphanumeric with hyphens, no s
 
 ### Host-Side Storage
 
-Shared directories would be stored alongside agent homes in the grove's external config directory:
+Shared directories are stored alongside agent homes in the grove's external config directory:
 
 ```
 ~/.scion/grove-configs/<slug>__<uuid>/
@@ -70,7 +73,8 @@ Shared directories would be stored alongside agent homes in the grove's external
 └── shared-dirs/           # NEW
     ├── build-cache/       # One directory per declared shared dir
     ├── shared-context/
-    └── artifacts/
+    ├── artifacts/
+    └── workspace-cache/
 ```
 
 This location is:
@@ -79,107 +83,63 @@ This location is:
 - Per-grove (naturally scoped)
 - Persistent across agent restarts and reprovisioning
 
-## Mount Target Options
+For hub-native groves, shared dirs live at `~/.scion/grove-configs/<hub-grove>/shared-dirs/<name>/` on each broker — the same grove-configs path used for agent homes. The `~/.scion/groves/<hub-grove>/` path is reserved for hub-native workspaces, not configuration state.
 
-### Option A: Dedicated Mount Root (Recommended)
+## Mount Target Strategy
 
-Mount shared directories under a well-known root path:
+Each shared directory can be mounted in one of two locations, controlled by the `in_workspace` flag:
+
+### Default: `/scion-volumes/<name>`
+
+When `in_workspace` is false (the default), the shared directory is mounted under a dedicated root:
 
 ```
-/scion/shared/<name>
+/scion-volumes/build-cache
+/scion-volumes/shared-context
+/scion-volumes/artifacts
 ```
-
-Examples:
-- `/scion/shared/build-cache`
-- `/scion/shared/shared-context`
-- `/scion/shared/artifacts`
 
 **Pros:**
 - Clean namespace, no collision with workspace or home
-- Obvious and discoverable — agents can `ls /scion/shared/` to see all available shared dirs
+- Obvious and discoverable — agents can `ls /scion-volumes/` to see all available shared dirs
 - No interaction with git (outside workspace and repo-root)
 - No `.gitignore` concerns
 - Consistent across all runtimes
-- Extensible — `/scion/` prefix could host other scion-managed mounts in the future
+- Extensible — `/scion-volumes/` could host other scion-managed mounts in the future
 
 **Cons:**
 - Requires agents/tasks to reference a non-standard path
 - Not in the workspace, so tools that operate on workspace files won't naturally see shared dir contents
 
-### Option B: Under Workspace (e.g., `/workspace/.shared/<name>`)
+### Workspace Mount: `/workspace/.scion-volumes/<name>`
 
-Mount shared directories inside the workspace tree:
+When `in_workspace: true`, the shared directory is mounted inside the workspace tree:
 
 ```
-/workspace/.shared/build-cache
-/workspace/.shared/shared-context
+/workspace/.scion-volumes/build-cache
+/workspace/.scion-volumes/workspace-cache
 ```
 
 **Pros:**
 - Visible to tools that operate on the workspace
 - Feels "close" to the code being worked on
+- Useful for caches that tools expect to find relative to the project root
 
 **Cons:**
-- **Git interaction**: If the workspace is a git worktree, the `.shared` directory would appear as untracked content. This requires:
-  - Adding `.shared/` to `.gitignore` (modifies repo state, potentially committed)
-  - Or adding to worktree-specific excludes (`.git/info/exclude`) — but worktree `.git` is a reference file, not a directory
-  - Or using `git update-index --assume-unchanged` — fragile
-- **Bind mount over existing dir**: If `.shared/` already exists in the repo, the mount shadows it
-- **Agent confusion**: LLM agents may try to commit, modify, or reference `.shared` contents as part of the codebase
-- **Workspace sync (K8s)**: Kubernetes runtime syncs workspace via tar — shared dirs would need to be excluded from sync to avoid duplicating large caches
+- **Git interaction**: The `.scion-volumes` directory will appear as untracked content in the git worktree. Users will likely want to add `.scion-volumes/` to their `.gitignore`.
+- **Bind mount over existing dir**: If `.scion-volumes/` already exists in the repo, the mount shadows it
+- **Agent confusion**: LLM agents may try to commit or reference `.scion-volumes` contents as part of the codebase
+- **Workspace sync (K8s)**: Kubernetes runtime syncs workspace via tar — in-workspace shared dirs would need to be excluded from sync to avoid duplicating large caches
 
-### Option C: Under Home Directory (e.g., `/home/<user>/shared/<name>`)
+### Environment Variable
 
-Mount shared directories inside the agent's home:
+Inject `SCION_VOLUMES=/scion-volumes` into agent environment so agents and scripts can programmatically discover the shared directory root. In-workspace mounts are also discoverable at `$WORKSPACE/.scion-volumes/` but do not get a separate env var.
 
-```
-/home/scion/shared/build-cache
-```
+### Alternatives Considered for Mount Paths
 
-**Pros:**
-- No git concerns
-- Within the agent's "territory"
+**Under Home Directory (`/home/<user>/shared/<name>`)**: Rejected because home is per-agent, creating a confusing ownership model. Path varies by runtime user (`/home/scion/` vs `/home/gemini/`). Less discoverable.
 
-**Cons:**
-- Home directory is per-agent — mounting a shared dir inside it creates a confusing ownership model
-- Name collision risk with harness-specific directories
-- Less discoverable (buried inside home)
-- Different path per runtime user (`/home/scion/shared/` vs `/home/gemini/shared/`)
-
-### Option D: Environment Variable + Configurable Target
-
-Let users specify the mount target per shared dir, with a default:
-
-```yaml
-shared_dirs:
-  - name: build-cache
-    target: /scion/shared/build-cache    # default, can be overridden
-  - name: node-cache
-    target: /workspace/.cache/node       # custom target
-```
-
-**Pros:**
-- Maximum flexibility
-- Supports use cases where a specific path is required (e.g., tool-specific cache dirs)
-
-**Cons:**
-- More complex configuration
-- Per-agent override of target path could lead to inconsistency
-- Harder to reason about "where are the shared dirs?"
-
-### Recommendation
-
-**Option A (`/scion/shared/<name>`)** as the default, with **Option D's override capability** as an optional extension:
-
-```yaml
-shared_dirs:
-  - name: build-cache
-    # mounts at /scion/shared/build-cache by default
-  - name: node-cache
-    target: /tmp/node-cache    # optional override
-```
-
-Additionally, inject an environment variable `SCION_SHARED_DIR=/scion/shared` so agents and scripts can programmatically discover the shared directory root.
+**Configurable target per dir**: Rejected in favor of the simpler two-mode approach (`in_workspace` toggle). Arbitrary target paths make it harder to reason about where shared dirs live and create inconsistency across agents.
 
 ## Implementation Approach
 
@@ -192,7 +152,6 @@ Add `SharedDir` type to `pkg/api/types.go` and `SharedDirs []SharedDir` to the `
 Add validation:
 - `Name` must be a valid slug (`^[a-z0-9][a-z0-9-]*[a-z0-9]$`)
 - No duplicate names within a grove
-- Optional `Target` override must be an absolute path
 
 #### 2. Storage Provisioning
 
@@ -205,37 +164,42 @@ In `pkg/config/init.go` or a new `pkg/config/shared_dirs.go`:
 
 In `pkg/agent/run.go`, during `RunConfig` construction:
 - Read `shared_dirs` from grove settings
-- For each shared dir, synthesize a `VolumeMount`:
+- For each shared dir, synthesize a `VolumeMount` and append to `RunConfig.Volumes`:
   ```go
+  target := fmt.Sprintf("/scion-volumes/%s", dir.Name)
+  if dir.InWorkspace {
+      target = fmt.Sprintf("/workspace/.scion-volumes/%s", dir.Name)
+  }
   api.VolumeMount{
-      Source: sharedDirHostPath,
-      Target: fmt.Sprintf("/scion/shared/%s", dir.Name),  // or dir.Target if set
+      Source:   sharedDirHostPath,
+      Target:   target,
       ReadOnly: dir.ReadOnly,
   }
   ```
-- Append to `RunConfig.Volumes` before passing to runtime
 
-This leverages the existing `buildCommonRunArgs()` → volume deduplication → bind mount pipeline with **zero changes to runtime code**.
+This reuses the existing `VolumeMount` type and the `buildCommonRunArgs()` → volume deduplication → bind mount pipeline with **zero changes to runtime code**.
 
 #### 4. Environment Variable
 
-Add `SCION_SHARED_DIR=/scion/shared` to agent environment variables in the run config.
+Add `SCION_VOLUMES=/scion-volumes` to agent environment variables in the run config.
 
 #### 5. CLI Commands
 
 ```bash
-# List shared directories for current grove
-scion shared list
+# List shared directories for current grove (or specified grove)
+scion shared-dir list [--grove <grove>]
 
 # Create a new shared directory
-scion shared create <name>
+scion shared-dir create <name> [--grove <grove>] [--in-workspace] [--read-only]
 
 # Remove a shared directory (with confirmation)
-scion shared remove <name>
+scion shared-dir remove <name> [--grove <grove>]
 
 # Inspect a shared directory (show path, size, agents using it)
-scion shared info <name>
+scion shared-dir info <name> [--grove <grove>]
 ```
+
+The `--grove` flag allows operating on a specific grove when not running from within a grove context (consistent with other `scion` subcommands).
 
 ### Phase 2: Kubernetes Support
 
@@ -245,7 +209,7 @@ For Kubernetes, local bind mounts are not supported. Shared directories require 
 
 - When a grove has shared dirs and uses a Kubernetes runtime, create a PVC per shared dir (or one PVC with subdirectories)
 - PVC access mode: `ReadWriteMany` (RWX) — requires a storage class that supports it (e.g., NFS, GCE Filestore, EFS)
-- Mount the PVC at `/scion/shared/<name>` in the pod spec
+- Mount the PVC at `/scion-volumes/<name>` (or `/workspace/.scion-volumes/<name>` for in-workspace dirs) in the pod spec
 
 ```go
 // In k8s_runtime.go buildPod():
@@ -262,7 +226,7 @@ for _, sd := range config.SharedDirs {
     // Add volume mount to container
     container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
         Name:      fmt.Sprintf("shared-%s", sd.Name),
-        MountPath: fmt.Sprintf("/scion/shared/%s", sd.Name),
+        MountPath: target,  // /scion-volumes/<name> or /workspace/.scion-volumes/<name>
         ReadOnly:  sd.ReadOnly,
     })
 }
@@ -288,7 +252,7 @@ For cases where persistence across pod restarts is not required, an `EmptyDir` c
 For the hosted architecture:
 - Hub API gains shared dir metadata as part of grove registration
 - Runtime brokers provision shared dir storage based on hub grove config
-- Broker-side storage at `~/.scion/groves/<hub-grove>/shared-dirs/<name>/`
+- On each broker, shared dirs are stored at `~/.scion/grove-configs/<hub-grove>/shared-dirs/<name>/` — the same grove-configs directory used for agent homes and other grove configuration state
 - Cross-broker sharing would require a network filesystem or object storage — out of scope for initial implementation
 
 ## Per-Agent Access Control
@@ -323,14 +287,16 @@ Instead of a dedicated `shared_dirs` concept, users could be told to configure v
 ```yaml
 volumes:
   - source: ~/.scion/grove-configs/my-project__abc123/custom-shared/
-    target: /scion/shared/my-data
+    target: /scion-volumes/my-data
 ```
 
-**Why rejected:**
+**Why rejected as the user-facing interface:**
 - Requires users to know internal grove paths
 - No grove-level abstraction — each profile/template must repeat the config
 - No lifecycle management (create/delete)
 - Doesn't compose well with Kubernetes (local volumes not supported)
+
+However, this *is* the internal representation — shared dirs are synthesized into `VolumeMount` entries before being passed to the runtime, reusing all existing mount machinery.
 
 ### Alternative: Symlink-Based Sharing
 
@@ -352,22 +318,47 @@ Use Docker named volumes instead of bind mounts for shared dirs.
 
 ## Open Questions
 
-| # | Question | Notes |
-|---|----------|-------|
-| 1 | **Should shared dirs be auto-mounted to all agents, or opt-in per agent?** | Auto-mount is simpler and matches the "grove-scoped" model. Opt-in (via template/profile) adds flexibility but complexity. Recommend auto-mount with `exclude` override. |
-| 2 | **Should there be a size limit or quota for shared dirs?** | Useful for preventing runaway cache growth. Could be enforced via `du` checks or filesystem quotas. Likely a Phase 2 concern. |
-| 3 | **How should shared dirs interact with `scion clone` / grove duplication?** | Options: copy shared dirs (expensive), reference the same dirs (surprising), or start fresh (clean). |
-| 4 | **Should we support GCS-backed shared dirs?** | The existing `gcs` volume type could back shared dirs for cloud-native setups. Natural extension of the GCS volume support. |
-| 5 | **Naming: `shared_dirs` vs `grove_dirs` vs `shared_volumes`?** | `shared_dirs` emphasizes the sharing aspect. `grove_dirs` emphasizes scope. Current preference: `shared_dirs`. |
-| 6 | **Should the mount root be `/scion/shared/` or `/scion-mnts/`?** | `/scion/shared/` is more descriptive and leaves room for other scion-managed mounts under `/scion/`. `/scion-mnts/` is shorter but less clear. |
-| 7 | **What permissions/ownership should shared dir contents have?** | Host UID/GID may differ from container UID/GID. Existing `SCION_HOST_UID`/`SCION_HOST_GID` pattern could be used. May need a chown step on container startup. |
-| 8 | **Should shared dirs be included in `scion snapshot` / backup operations?** | If snapshot support is added, shared dirs may contain large caches that should be excluded by default. |
+### 1. Auto-mount vs opt-in per agent
+
+Should shared dirs be auto-mounted to all agents in a grove, or should agents opt-in? Auto-mount is simpler and matches the "grove-scoped" model. Opt-in (via template/profile) adds flexibility but complexity. Current recommendation is auto-mount with an `exclude` override in per-agent config (see Per-Agent Access Control section).
+
+### 2. Size limits and quotas
+
+Should there be a size limit or quota for shared dirs? This would be useful for preventing runaway cache growth from build caches or artifact accumulation. Could be enforced via periodic `du` checks, filesystem quotas, or a configurable max size in the `SharedDir` definition. Likely a Phase 2 concern.
+
+### 3. Interaction with grove cloning / duplication
+
+How should shared dirs behave when a grove is cloned or duplicated? Options: copy shared dir contents (expensive for large caches), reference the same host dirs (surprising and potentially dangerous), or start with empty dirs (clean slate). The "clean slate" approach seems safest as a default.
+
+### 4. GCS-backed shared dirs
+
+Should we support GCS (or other object storage) as a backing store for shared dirs? The existing `gcs` volume type in `VolumeMount` already supports GCS buckets via gcsfuse. This could be a natural extension — a `type: gcs` field on `SharedDir` with `bucket` and `prefix` fields. This would also partially address cross-broker sharing in the hosted architecture.
+
+### 5. Naming: `shared_dirs` vs `grove_dirs` vs `shared_volumes`
+
+`shared_dirs` emphasizes the sharing aspect between agents. `grove_dirs` emphasizes the scope. `shared_volumes` aligns with the underlying volume terminology but may be confused with the existing `volumes` config. Current preference is `shared_dirs`.
+
+### 6. Permissions and ownership of shared dir contents
+
+Host UID/GID may differ from container UID/GID, which can cause permission issues when multiple agents (potentially with different container users) write to the same shared dir. The existing `SCION_HOST_UID`/`SCION_HOST_GID` pattern could be extended. Options include: a chown step on container startup, creating shared dirs with broad permissions (e.g., 0777), or using a consistent container user across agents in a grove.
+
+### 7. Gitignore management for in-workspace mounts
+
+When `in_workspace: true` is used, `.scion-volumes/` will appear as untracked content in the git worktree. Should scion automatically add `.scion-volumes/` to `.gitignore` or to the worktree-specific git excludes? Auto-modifying `.gitignore` changes repo state which may be undesirable. Documenting that users should add it manually is simpler but easy to forget.
+
+### 8. Snapshot and backup inclusion
+
+If snapshot or backup support is added to scion, should shared dirs be included? Shared dirs may contain large caches that would bloat snapshots. Recommend excluding by default with an opt-in flag.
+
+### 9. Lifecycle of shared dirs relative to agents
+
+Should shared dirs persist when all agents in a grove are deleted? Current design says yes (they are grove-scoped, not agent-scoped), and they are only removed via explicit `scion shared-dir remove`. But this means orphaned shared dirs could accumulate. Should `scion shared-dir list` show usage/staleness info?
 
 ## References
 
-- [Grove Mount Protection](.design/grove-mount-protection.md) — Related: agent isolation and mount security
-- [GCS Volume Support](.design/initial-gcs-volume-support.md) — Prior art: volume type extension
-- [Agent Config Flow](.design/agent-config-flow.md) — How agent configuration is resolved and merged
+- [Grove Mount Protection](grove-mount-protection.md) — Related: agent isolation and mount security
+- [GCS Volume Support](initial-gcs-volume-support.md) — Prior art: volume type extension
+- [Agent Config Flow](agent-config-flow.md) — How agent configuration is resolved and merged
 - `pkg/api/types.go` — `VolumeMount` struct definition
 - `pkg/runtime/common.go` — `buildCommonRunArgs()` volume mounting logic
 - `pkg/config/settings.go` — Settings struct and volume expansion

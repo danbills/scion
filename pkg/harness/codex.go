@@ -86,8 +86,7 @@ func (c *Codex) HasSystemPrompt(agentHome string) bool {
 	return false
 }
 
-func (c *Codex) Provision(ctx context.Context, agentName, agentHome, agentWorkspace string) error {
-	agentDir := filepath.Dir(agentHome)
+func (c *Codex) Provision(ctx context.Context, agentName, agentDir, agentHome, agentWorkspace string) error {
 	scionAgentPath := filepath.Join(agentDir, "scion-agent.json")
 
 	var telemetryCfg *api.TelemetryConfig

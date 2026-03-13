@@ -80,7 +80,7 @@ func (g *Generic) HasSystemPrompt(agentHome string) bool {
 	return false
 }
 
-func (g *Generic) Provision(ctx context.Context, agentName, agentHome, agentWorkspace string) error {
+func (g *Generic) Provision(ctx context.Context, agentName, agentDir, agentHome, agentWorkspace string) error {
 	return nil
 }
 

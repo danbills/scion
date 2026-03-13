@@ -382,7 +382,7 @@ func TestCodexProvision_ReconcilesTelemetryFromScionAgentConfig(t *testing.T) {
 	requireNoErr(t, os.WriteFile(filepath.Join(agentDir, "scion-agent.json"), data, 0644))
 
 	c := &Codex{}
-	err = c.Provision(context.Background(), "agent", agentHome, "/workspace")
+	err = c.Provision(context.Background(), "agent", agentDir, agentHome, "/workspace")
 	requireNoErr(t, err)
 
 	out, err := os.ReadFile(filepath.Join(agentHome, ".codex", "config.toml"))

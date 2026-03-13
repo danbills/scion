@@ -86,7 +86,7 @@ func TestClaudeCode_Provision(t *testing.T) {
 	c := &ClaudeCode{}
 	// Note: Provision uses util.RepoRoot() which might return an error or different path 
 	// depending on where tests run. In a real environment it would be more predictable.
-	err := c.Provision(context.Background(), "test-agent", agentHome, agentWorkspace)
+	err := c.Provision(context.Background(), "test-agent", tmpDir, agentHome, agentWorkspace)
 	if err != nil {
 		t.Fatalf("Provision failed: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestClaudeCode_Provision_VertexAI(t *testing.T) {
 	os.WriteFile(scionAgentPath, data, 0644)
 
 	c := &ClaudeCode{}
-	err := c.Provision(context.Background(), "test-agent", agentHome, agentWorkspace)
+	err := c.Provision(context.Background(), "test-agent", agentDir, agentHome, agentWorkspace)
 	if err != nil {
 		t.Fatalf("Provision failed: %v", err)
 	}

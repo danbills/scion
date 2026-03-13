@@ -85,7 +85,7 @@ func (o *OpenCode) HasSystemPrompt(agentHome string) bool {
 	return false
 }
 
-func (o *OpenCode) Provision(ctx context.Context, agentName, agentHome, agentWorkspace string) error {
+func (o *OpenCode) Provision(ctx context.Context, agentName, agentDir, agentHome, agentWorkspace string) error {
 	return nil
 }
 

@@ -98,14 +98,13 @@ func (c *ClaudeCode) HasSystemPrompt(agentHome string) bool {
 	return c.loadSystemPrompt(agentHome) != ""
 }
 
-func (c *ClaudeCode) Provision(ctx context.Context, agentName, agentHome, agentWorkspace string) error {
+func (c *ClaudeCode) Provision(ctx context.Context, agentName, agentDir, agentHome, agentWorkspace string) error {
 	// 1. Update .claude.json project paths
 	if err := c.provisionClaudeJSON(agentHome, agentWorkspace); err != nil {
 		return err
 	}
 
 	// 2. Project auth-specific env vars into scion-agent.json
-	agentDir := filepath.Dir(agentHome)
 	scionAgentPath := filepath.Join(agentDir, "scion-agent.json")
 
 	data, err := os.ReadFile(scionAgentPath)

@@ -144,11 +144,13 @@ func OverlayFileSecrets(auth *api.AuthConfig, secrets []api.ResolvedSecret) {
 // Note: we intentionally do NOT fall back to the host's harness settings
 // (e.g. ~/.gemini/settings.json) because those contain harness-internal
 // auth type values (like "oauth-personal") that are not valid universal types.
-func OverlaySettings(auth *api.AuthConfig, h api.Harness, agentHome string) {
+// agentDir is the directory containing scion-agent.json (which may differ
+// from filepath.Dir(agentHome) when split storage is active).
+func OverlaySettings(auth *api.AuthConfig, h api.Harness, agentDir string) {
 	selectedType := ""
 
 	// Check scion-agent.json for top-level auth_selectedType
-	scionAgentPath := filepath.Join(filepath.Dir(agentHome), "scion-agent.json")
+	scionAgentPath := filepath.Join(agentDir, "scion-agent.json")
 	if data, err := os.ReadFile(scionAgentPath); err == nil {
 		var cfg api.ScionConfig
 		if err := json.Unmarshal(data, &cfg); err == nil {

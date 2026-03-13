@@ -338,7 +338,7 @@ func (m *AgentManager) Start(ctx context.Context, opts api.StartOptions) (*api.A
 			auth.GoogleCloudProject,
 			opts.BrokerMode,
 		)
-		harness.OverlaySettings(&auth, h, agentHome)
+		harness.OverlaySettings(&auth, h, agentDir)
 		// Apply CLI harness auth override (--harness-auth) before resolution.
 		// This has highest priority, overriding settings, templates, and harness configs.
 		if opts.HarnessAuth != "" {

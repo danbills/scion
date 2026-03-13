@@ -750,7 +750,7 @@ func ProvisionAgent(ctx context.Context, agentName string, templateName string, 
 	}
 
 	// 3. Harness provisioning
-	if err := h.Provision(ctx, agentName, agentHome, agentWorkspace); err != nil {
+	if err := h.Provision(ctx, agentName, agentDir, agentHome, agentWorkspace); err != nil {
 		return "", "", nil, fmt.Errorf("harness provisioning failed: %w", err)
 	}
 

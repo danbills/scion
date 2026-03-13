@@ -48,7 +48,7 @@ func (h *EnvHarness) GetEnv(agentName, homeDir, username string) map[string]stri
 func (h *EnvHarness) DefaultConfigDir() string              { return ".test" }
 func (h *EnvHarness) SkillsDir() string                    { return ".test/skills" }
 func (h *EnvHarness) HasSystemPrompt(agentHome string) bool { return false }
-func (h *EnvHarness) Provision(ctx context.Context, agentName, agentHome, agentWorkspace string) error {
+func (h *EnvHarness) Provision(ctx context.Context, agentName, agentDir, agentHome, agentWorkspace string) error {
 	return nil
 }
 func (h *EnvHarness) GetEmbedDir() string                                            { return "test" }

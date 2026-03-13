@@ -648,7 +648,7 @@ func TestOverlaySettings_ReadsScionAgentJSON(t *testing.T) {
 
 	auth := api.AuthConfig{}
 	h := New("gemini")
-	OverlaySettings(&auth, h, agentHome)
+	OverlaySettings(&auth, h, tmpDir)
 
 	if auth.SelectedType != "auth-file" {
 		t.Errorf("SelectedType = %q, want %q", auth.SelectedType, "auth-file")
@@ -672,7 +672,7 @@ func TestOverlaySettings_IgnoresHostGeminiSettings(t *testing.T) {
 
 	auth := api.AuthConfig{}
 	h := New("gemini")
-	OverlaySettings(&auth, h, agentHome)
+	OverlaySettings(&auth, h, tmpDir)
 
 	// Should NOT pick up "oauth-personal" from host Gemini settings
 	if auth.SelectedType != "" {
@@ -688,7 +688,7 @@ func TestOverlaySettings_NoScionAgentJSON(t *testing.T) {
 	// No scion-agent.json exists
 	auth := api.AuthConfig{}
 	h := New("gemini")
-	OverlaySettings(&auth, h, agentHome)
+	OverlaySettings(&auth, h, tmpDir)
 
 	if auth.SelectedType != "" {
 		t.Errorf("SelectedType = %q, want empty", auth.SelectedType)

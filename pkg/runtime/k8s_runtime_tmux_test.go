@@ -46,7 +46,7 @@ func (m *MockHarness) GetEnv(agentName, homeDir, username string) map[string]str
 func (m *MockHarness) DefaultConfigDir() string              { return ".mock" }
 func (m *MockHarness) SkillsDir() string                    { return ".mock/skills" }
 func (m *MockHarness) HasSystemPrompt(agentHome string) bool { return false }
-func (m *MockHarness) Provision(ctx context.Context, agentName, agentHome, agentWorkspace string) error {
+func (m *MockHarness) Provision(ctx context.Context, agentName, agentDir, agentHome, agentWorkspace string) error {
 	return nil
 }
 func (m *MockHarness) GetEmbedDir() string                                            { return "mock" }

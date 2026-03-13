@@ -127,8 +127,7 @@ func (g *GeminiCLI) isValidPromptFile(path string) bool {
 	return true
 }
 
-func (g *GeminiCLI) Provision(ctx context.Context, agentName, agentHome, agentWorkspace string) error {
-	agentDir := filepath.Dir(agentHome)
+func (g *GeminiCLI) Provision(ctx context.Context, agentName, agentDir, agentHome, agentWorkspace string) error {
 	scionAgentPath := filepath.Join(agentDir, "scion-agent.json")
 
 	data, err := os.ReadFile(scionAgentPath)

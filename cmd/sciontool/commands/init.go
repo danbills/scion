@@ -853,44 +853,68 @@ func gitCloneWorkspace(uid, gid int) error {
 	// Determine the agent feature branch name early so we can try cloning it.
 	agentBranch := os.Getenv("SCION_AGENT_BRANCH")
 
-	// Clone strategy: if an agent branch is specified, try cloning that branch
-	// from origin first (it may already exist as a remote branch). If that fails,
-	// fall back to cloning the default branch (usually main).
+	// Initialize the workspace as a git repo. We use git-init + git-fetch
+	// instead of git-clone because the workspace directory may already
+	// contain bind-mounted directories (e.g. .scion-volumes/) from the
+	// container runtime, and git-clone refuses to work in a non-empty dir.
+	initCmd := exec.Command("git", "init", workspacePath)
+	setupGitCmd(initCmd)
+	if out, err := initCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git init failed: %s", sanitizeGitOutput(string(out), token))
+	}
+
+	remoteCmd := exec.Command("git", "-C", workspacePath, "remote", "add", "origin", authURL)
+	setupGitCmd(remoteCmd)
+	if out, err := remoteCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git remote add failed: %s", sanitizeGitOutput(string(out), token))
+	}
+
+	// fetchBranch attempts a shallow fetch of a single branch from origin.
+	// Returns sanitized stderr and whether the fetch succeeded.
+	fetchBranch := func(branchToFetch string) (string, bool) {
+		fetchCmd := exec.Command("git", "-C", workspacePath, "fetch", "--depth", depthStr, "origin", branchToFetch)
+		setupGitCmd(fetchCmd)
+		var stderr bytes.Buffer
+		fetchCmd.Stderr = &stderr
+		if err := fetchCmd.Run(); err != nil {
+			return sanitizeGitOutput(stderr.String(), token), false
+		}
+		return "", true
+	}
+
+	// Fetch strategy: if an agent branch is specified, try fetching that
+	// branch first (it may already exist on origin). If that fails, fall
+	// back to fetching the default branch (usually main).
 	clonedBranch := ""
 	if agentBranch != "" && agentBranch != branch {
-		log.Info("Attempting to clone repository %s (branch: %s, depth: %s)", normalizedURL, agentBranch, depthStr)
-		cloneArgs := []string{"clone", "--depth", depthStr, "--branch", agentBranch, authURL, workspacePath}
-		tryCmd := exec.Command("git", cloneArgs...)
-		setupGitCmd(tryCmd)
-		var tryStderr bytes.Buffer
-		tryCmd.Stderr = &tryStderr
-		if err := tryCmd.Run(); err == nil {
+		log.Info("Attempting to fetch repository %s (branch: %s, depth: %s)", normalizedURL, agentBranch, depthStr)
+		errOutput, ok := fetchBranch(agentBranch)
+		if ok {
 			clonedBranch = agentBranch
-			log.Info("Successfully cloned agent branch %s from origin", agentBranch)
+			log.Info("Successfully fetched agent branch %s from origin", agentBranch)
 		} else {
-			tryErrOutput := sanitizeGitOutput(tryStderr.String(), token)
-			// If git reports authentication failure, don't bother trying the
-			// default branch — the credentials are wrong/missing for the repo.
-			if isAuthError(tryErrOutput) {
-				return formatCloneError(tryErrOutput, token)
+			if isAuthError(errOutput) {
+				return formatCloneError(errOutput, token)
 			}
 			log.Info("Agent branch %s not found on origin, falling back to %s", agentBranch, branch)
 		}
 	}
 
 	if clonedBranch == "" {
-		log.Info("Cloning repository %s (branch: %s, depth: %s)", normalizedURL, branch, depthStr)
-		cloneArgs := []string{"clone", "--depth", depthStr, "--branch", branch, authURL, workspacePath}
-		cmd := exec.Command("git", cloneArgs...)
-		setupGitCmd(cmd)
-		var stderr bytes.Buffer
-		cmd.Stderr = &stderr
-
-		if err := cmd.Run(); err != nil {
-			errOutput := sanitizeGitOutput(stderr.String(), token)
+		log.Info("Fetching repository %s (branch: %s, depth: %s)", normalizedURL, branch, depthStr)
+		errOutput, ok := fetchBranch(branch)
+		if !ok {
 			return formatCloneError(errOutput, token)
 		}
 		clonedBranch = branch
+	}
+
+	// Check out the fetched branch to populate the working tree.
+	checkoutArgs := []string{"-C", workspacePath, "checkout", "-b", clonedBranch, "origin/" + clonedBranch}
+	coCmd := exec.Command("git", checkoutArgs...)
+	setupGitCmd(coCmd)
+	if out, err := coCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git checkout failed: %s", sanitizeGitOutput(string(out), token))
 	}
 
 	// Configure git identity

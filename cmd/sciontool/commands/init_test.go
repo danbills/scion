@@ -208,6 +208,23 @@ func TestIsWorkspaceEmpty(t *testing.T) {
 		}
 	})
 
+	t.Run("directory with only .scion-volumes", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		os.MkdirAll(filepath.Join(tmpDir, ".scion-volumes"), 0755)
+		if !isWorkspaceEmpty(tmpDir) {
+			t.Error("expected true when workspace contains only .scion-volumes")
+		}
+	})
+
+	t.Run("directory with .scion and .scion-volumes", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		os.MkdirAll(filepath.Join(tmpDir, ".scion"), 0755)
+		os.MkdirAll(filepath.Join(tmpDir, ".scion-volumes"), 0755)
+		if !isWorkspaceEmpty(tmpDir) {
+			t.Error("expected true when workspace contains only .scion and .scion-volumes")
+		}
+	})
+
 	t.Run("directory with .scion marker and real content", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		os.MkdirAll(filepath.Join(tmpDir, ".scion"), 0755)

@@ -1027,9 +1027,9 @@ func isClaude(childArgs []string) bool {
 }
 
 // isWorkspaceEmpty returns true if the directory doesn't exist or contains
-// only provisioning marker entries (e.g. .scion/). A workspace with only
-// marker directories is considered empty for git-clone purposes so that
-// sciontool proceeds with cloning rather than skipping it.
+// only provisioning marker entries (e.g. .scion/, .scion-volumes/). A workspace
+// with only marker directories is considered empty for git-clone purposes so
+// that sciontool proceeds with cloning rather than skipping it.
 func isWorkspaceEmpty(path string) bool {
 	entries, err := os.ReadDir(path)
 	if err != nil {
@@ -1038,8 +1038,8 @@ func isWorkspaceEmpty(path string) bool {
 	// Filter out known marker entries that don't indicate a real workspace
 	for _, e := range entries {
 		switch e.Name() {
-		case ".scion":
-			// Provisioning marker directory — ignore
+		case ".scion", ".scion-volumes":
+			// Provisioning marker / shared-dir mount directory — ignore
 			continue
 		default:
 			log.Debug("Workspace not empty: found %q in %s", e.Name(), path)

@@ -1036,12 +1036,21 @@ func GetAgent(ctx context.Context, agentName string, templateName string, agentI
 	return agentDir, agentHome, agentWorkspace, finalCfg, nil
 }
 
-// isWorkspaceEmptyDir returns true if the directory is empty or does not exist.
+// isWorkspaceEmptyDir returns true if the directory is empty or contains only
+// provisioning artifacts (e.g. .scion/, .scion-volumes/).
 func isWorkspaceEmptyDir(path string) bool {
 	entries, err := os.ReadDir(path)
 	if err != nil {
 		return true
 	}
-	return len(entries) == 0
+	for _, e := range entries {
+		switch e.Name() {
+		case ".scion", ".scion-volumes":
+			continue
+		default:
+			return false
+		}
+	}
+	return true
 }
 

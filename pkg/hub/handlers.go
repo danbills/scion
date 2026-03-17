@@ -3560,6 +3560,25 @@ func (s *Server) deleteGrove(w http.ResponseWriter, r *http.Request, id string) 
 		}
 	}
 
+	// Clean up the grove-configs directory (~/.scion/grove-configs/<slug>__<short-uuid>/).
+	// This stores external settings, templates, and agent homes for both
+	// git-backed linked groves and non-git external groves.
+	if grove.Slug != "" && grove.ID != "" {
+		marker := &config.GroveMarker{
+			GroveID:   grove.ID,
+			GroveSlug: grove.Slug,
+		}
+		if configPath, err := marker.ExternalGrovePath(); err == nil {
+			// ExternalGrovePath returns <grove-configs>/<slug__uuid>/.scion —
+			// remove the parent (<slug__uuid>) directory.
+			groveConfigDir := filepath.Dir(configPath)
+			if err := config.RemoveGroveConfig(groveConfigDir); err != nil && !os.IsNotExist(err) {
+				slog.Warn("failed to remove grove config directory",
+					"grove", id, "slug", grove.Slug, "path", groveConfigDir, "error", err)
+			}
+		}
+	}
+
 	s.events.PublishGroveDeleted(ctx, id)
 
 	w.WriteHeader(http.StatusNoContent)

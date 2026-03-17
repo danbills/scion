@@ -27,6 +27,7 @@ import (
 
 	"github.com/GoogleCloudPlatform/scion/pkg/agent/state"
 	"github.com/GoogleCloudPlatform/scion/pkg/api"
+	"github.com/GoogleCloudPlatform/scion/pkg/config"
 	"github.com/GoogleCloudPlatform/scion/pkg/store"
 	"github.com/GoogleCloudPlatform/scion/pkg/util"
 	"github.com/stretchr/testify/assert"
@@ -1082,6 +1083,48 @@ func TestDeleteGrove_CascadesEnvVarsSecretsHarnessConfigs(t *testing.T) {
 	hubVars, err := s.ListEnvVars(ctx, store.EnvVarFilter{Scope: store.ScopeHub, ScopeID: store.ScopeIDHub})
 	require.NoError(t, err)
 	assert.Len(t, hubVars, 1, "hub-scoped env var should not be affected")
+}
+
+// TestDeleteGrove_CleansUpGroveConfigsDir verifies that deleting a grove
+// removes the ~/.scion/grove-configs/<slug>__<short-uuid>/ directory.
+func TestDeleteGrove_CleansUpGroveConfigsDir(t *testing.T) {
+	srv, s := testServer(t)
+	ctx := context.Background()
+
+	grove := createTestGitGrove(t, srv, "Config Cleanup Test", "github.com/test/config-cleanup-repo")
+
+	// Create the grove-configs directory that would exist in workstation mode
+	marker := &config.GroveMarker{
+		GroveID:   grove.ID,
+		GroveSlug: grove.Slug,
+	}
+	extPath, err := marker.ExternalGrovePath()
+	require.NoError(t, err)
+
+	// Create the directory structure: ~/.scion/grove-configs/<slug>__<uuid>/.scion/
+	require.NoError(t, os.MkdirAll(extPath, 0755))
+	// Also create an agents/ sibling directory
+	agentsDir := filepath.Join(filepath.Dir(extPath), "agents", "test-agent", "home")
+	require.NoError(t, os.MkdirAll(agentsDir, 0755))
+
+	groveConfigDir := filepath.Dir(extPath)
+	t.Cleanup(func() { os.RemoveAll(groveConfigDir) })
+
+	// Verify directory exists before deletion
+	_, err = os.Stat(groveConfigDir)
+	require.NoError(t, err, "grove-configs dir should exist before deletion")
+
+	// Delete grove via API
+	rec := doRequest(t, srv, http.MethodDelete, "/api/v1/groves/"+grove.ID, nil)
+	assert.Equal(t, http.StatusNoContent, rec.Code)
+
+	// Verify grove-configs directory was removed
+	_, err = os.Stat(groveConfigDir)
+	assert.True(t, os.IsNotExist(err), "grove-configs dir should be removed after grove deletion")
+
+	// Verify grove deleted from database
+	_, err = s.GetGrove(ctx, grove.ID)
+	assert.ErrorIs(t, err, store.ErrNotFound)
 }
 
 // TestGroveSyncTemplates_GroveNotFound verifies 404 for non-existent grove.

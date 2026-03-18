@@ -233,13 +233,13 @@ Add a **"Access Tokens"** page to the profile section:
 
 ### Implementation Plan
 
-#### Phase 1: Backend (Store + Service + Auth)
+#### Phase 1: Backend (Store + Service + Auth) ✅
 
-1. **Remove legacy API key system**: Delete `APIKeyService` (`pkg/hub/apikey.go`), `APIKeyStore` interface and SQLite implementation, API key endpoints (`/api/v1/auth/api-keys`), and all related `sk_live_*` handling from `UnifiedAuthMiddleware`. These have never been used.
-2. Add `UserAccessToken` model to `pkg/store/models.go`
-3. Add `UserAccessTokenStore` interface to `pkg/store/store.go`
-4. Implement SQLite storage in `pkg/store/sqlite/`
-5. Create `UserAccessTokenService` in `pkg/hub/useraccesstoken.go`
+1. ✅ **Remove legacy API key system**: Deleted `APIKeyService` (`pkg/hub/apikey.go`), `APIKeyStore` interface and SQLite implementation, API key endpoints (`/api/v1/auth/api-keys`), and all related `sk_live_*` handling from `UnifiedAuthMiddleware`.
+2. ✅ Add `UserAccessToken` model to `pkg/store/models.go`
+3. ✅ Add `UserAccessTokenStore` interface to `pkg/store/store.go`
+4. ✅ Implement SQLite storage in `pkg/store/sqlite/` (migration V34)
+5. ✅ Create `UserAccessTokenService` in `pkg/hub/useraccesstoken.go`
    - `CreateToken(ctx, userID, name, groveID, scopes, expiresAt)` → (plaintext, *UserAccessToken, error)
    - `ValidateToken(ctx, token)` → (ScopedUserIdentity, error)
    - `ListTokens(ctx, userID)` → ([]UserAccessToken, error)
@@ -247,12 +247,12 @@ Add a **"Access Tokens"** page to the profile section:
    - `DeleteToken(ctx, userID, tokenID)` → error
    - Enforce limit of **50 tokens per user**
    - Enforce maximum expiry of **1 year**, default to **90 days** if not specified
-6. Extend `UnifiedAuthMiddleware` to detect `scion_pat_` prefix and validate via the new service
-7. **Enforce UAT-creates-UAT prevention at the middleware level**: Reject requests authenticated with `scion_pat_*` tokens on the `/api/v1/auth/tokens` creation endpoint
-8. Introduce `ScopedUserIdentity` that wraps `UserIdentity` with grove/scope restrictions
-9. Augment `AuthzService.CheckAccess` to enforce grove + scope constraints when identity is scoped
-10. **Add auth-type to request logging**: Include the authentication method (JWT, UAT, dev-token) in standard request log entries
-11. Register API handlers on the server router
+6. ✅ Extend `UnifiedAuthMiddleware` to detect `scion_pat_` prefix and validate via the new service
+7. ✅ **Enforce UAT-creates-UAT prevention at the handler level**: Reject requests authenticated with `scion_pat_*` tokens on the `/api/v1/auth/tokens` creation endpoint
+8. ✅ Introduce `ScopedUserIdentity` that wraps `UserIdentity` with grove/scope restrictions
+9. ✅ Augment `AuthzService.CheckAccess` to enforce grove + scope constraints when identity is scoped
+10. ✅ **Add auth-type to request logging**: Include the authentication method (JWT, UAT, dev-token) in standard request log entries
+11. ✅ Register API handlers on the server router
 
 #### Phase 2: CLI Commands
 

@@ -1,7 +1,7 @@
 # GitHub App Integration for Scion Agents
 
 **Created:** 2026-03-18
-**Status:** Draft / Proposal (Rev 4)
+**Status:** Draft / Proposal (Rev 5)
 **Related:** `hosted/git-groves.md`, `hosted/secrets-gather.md`, `agent-credentials.md`, `hosted/auth/oauth-setup.md`
 
 ---
@@ -354,10 +354,11 @@ The Hub updates `GitHubAppGroveStatus` on these events:
 #### Fallback Behavior
 
 When the GitHub App status enters `error` state:
-1. The Hub attempts PAT fallback (per credential resolution order in §3.3).
-2. If a PAT is available, the agent starts with the PAT and the UI shows a warning: "Using PAT fallback. GitHub App issue: {error_message}."
-3. If no PAT is available, agent creation fails with a clear error referencing the GitHub App issue.
-4. The grove owner is notified (via Hub notification system) when the status transitions to `error`.
+1. **Re-check on agent start:** When an agent is created for a grove in `error` state, the Hub attempts token minting anyway (rather than immediately falling back). If it succeeds, the error is cleared and the grove status returns to `ok`. This provides the fastest recovery path when the underlying issue has been resolved.
+2. If token minting still fails, the Hub attempts PAT fallback (per credential resolution order in §3.3).
+3. If a PAT is available, the agent starts with the PAT and the UI shows a warning: "Using PAT fallback. GitHub App issue: {error_message}."
+4. If no PAT is available, agent creation fails with a clear error referencing the GitHub App issue.
+5. The grove owner is notified (via the Hub's notification system) when the status transitions to `error`.
 
 ---
 
@@ -487,7 +488,7 @@ When a grove is created from a GitHub URL and the Hub has a GitHub App configure
 2. Hub calls GET /app/installations (lists all installations)
 3. For each installation, calls GET /installation/repositories
 4. Finds installation(s) that include the grove's target repo
-5. If exactly one match: auto-associate
+5. If one or more matches: auto-associate with the **first match** (earliest installation). If additional installations also cover the repo, the Hub creates a **warning notification** to the Hub owner about the conflict.
 6. If no match: grove uses PAT, grove settings show "Install GitHub App" link
 ```
 
@@ -500,11 +501,11 @@ GitHub sends webhooks for installation lifecycle events. The Hub's webhook endpo
 | Event | Hub Action |
 |-------|------------|
 | `installation.created` | Record installation, match to groves by repo |
-| `installation.deleted` | Mark installation as `deleted`, set affected groves' status to `installation_revoked`, notify grove owners |
-| `installation.suspend` | Mark as `suspended`, set affected groves' status to `installation_suspended`, notify grove owners |
+| `installation.deleted` | Mark installation as `deleted`, set affected groves' status to `installation_revoked`, notify grove owners via Hub notification system |
+| `installation.suspend` | Mark as `suspended`, set affected groves' status to `installation_suspended`, notify grove owners via Hub notification system |
 | `installation.unsuspend` | Mark as `active`, clear suspension status on affected groves |
 | `installation_repositories.added` | Update installation's repo list, check for new grove matches |
-| `installation_repositories.removed` | Update repo list, set `repo_not_accessible` on affected groves, notify grove owners |
+| `installation_repositories.removed` | Update repo list, set `repo_not_accessible` on affected groves, notify grove owners via Hub notification system |
 
 **Public-Facing Requirement:** Webhooks require the Hub to be publicly reachable. The Hub config includes a flag:
 
@@ -531,7 +532,7 @@ This validation is documented in the Hub admin setup guide with troubleshooting 
 3. Running agents with valid tokens continue until their token expires (up to 1 hour).
 4. Token refresh attempts fail; `sciontool` logs: "GitHub App installation revoked for org 'acme'."
 5. Affected groves fall back to PAT if one is configured, or surface an error status.
-6. The Hub notifies the grove owner.
+6. The Hub notifies the grove owner via the Hub notification system.
 
 ### 6.5 Periodic Health Checks
 
@@ -541,7 +542,7 @@ When webhooks are disabled (or as a supplementary validation even when enabled),
 2. For each installation, it verifies the installation status and repo access.
 3. Discrepancies update the grove's `GitHubAppStatus` accordingly.
 
-**Frequency:** Conservative to avoid rate limit impact. Default: every 6 hours when webhooks are disabled, every 24 hours when webhooks are enabled (as a consistency check). Configurable via Hub settings.
+**Frequency:** Conservative to avoid rate limit impact. Default: every 6 hours when webhooks are disabled, every 24 hours when webhooks are enabled (as a consistency check). Installations that had a successful token mint within the last check interval are skipped. Configurable via Hub settings.
 
 ---
 
@@ -785,7 +786,9 @@ github_app:
 
 ---
 
-## 13. Private Key Rotation
+## 13. Credential Rotation
+
+### 13.1 Private Key Rotation
 
 The GitHub App private key can be rotated using GitHub's multi-key support:
 
@@ -798,7 +801,18 @@ The GitHub App private key can be rotated using GitHub's multi-key support:
 
 During steps 2-3, both keys are valid on GitHub's side, so there is no downtime window.
 
-A runbook for key rotation should be included in the operations guide.
+### 13.2 Webhook Secret Rotation
+
+The webhook secret does not support multi-secret overlap on GitHub's side. Rotation requires a brief coordinated update:
+
+**Procedure:**
+1. Update the webhook secret on GitHub (GitHub App settings → Webhook → Update secret).
+2. Immediately update the Hub configuration with the new secret.
+3. Restart the Hub server or trigger a config reload.
+
+During the brief window between steps 1 and 2 (typically seconds), incoming webhook events may fail signature validation and be dropped. The periodic health check (§6.5) acts as a safety net to detect any state changes missed during this window.
+
+A runbook for both private key and webhook secret rotation should be included in the operations guide.
 
 ---
 
@@ -915,10 +929,10 @@ This is comparable to installing any third-party GitHub App (CI systems, code re
 3. Grove creation flow with auto-discovery.
 4. Implement app permission sync (`POST /api/v1/github-app/sync-permissions`).
 5. Implement periodic health check loop for installations (§6.5).
-6. Grove owner notifications for status transitions.
+6. Grove owner notifications for status transitions (via Hub notification system).
 7. Commit attribution configuration (bot/custom/co-authored).
 8. Rate limit monitoring and warning system.
-9. Documentation: setup guide, webhook troubleshooting, key rotation runbook.
+9. Documentation: setup guide, webhook troubleshooting, private key and webhook secret rotation runbook.
 
 ---
 
@@ -946,43 +960,29 @@ Items from prior revisions that have been resolved by feedback or design decisio
 
 **Resolution:** Handled via `installation_repositories.removed` webhook (when webhooks are enabled) or detected at token minting time (when webhooks are disabled). Affected groves are set to `error` status with error code `repo_not_accessible`. The grove settings page shows the error with remediation guidance. See §4.4 and §6.4.
 
----
+### 17.6 Health Check Frequency and Rate Limit Budget
 
-## 18. Open Questions
+**Resolution:** The proposed defaults are sufficient: 6 hours when webhooks are disabled, 24 hours when webhooks are enabled. Installations that had a successful token mint within the last check interval are skipped to conserve rate limit budget. Configurable per-Hub. See §6.5.
 
-### 18.1 Health Check Frequency and Rate Limit Budget
+### 17.7 Grove Status Notification Channel
 
-**Question:** The periodic health check (§6.5) calls GitHub API endpoints for each installation. With many installations, this could consume significant rate limit budget. What's the right default frequency, and should the Hub skip checks for recently-validated installations?
+**Resolution:** Use the Hub's built-in notification system, which may include an integrated notification/message broker. Grove status transitions to `error` are delivered through this system. No separate notification subsystem design is needed — this piggybacks on whatever notification infrastructure the Hub already provides.
 
-**Leaning:** Default to 6 hours (webhooks disabled) / 24 hours (webhooks enabled). Skip installations that had a successful token mint within the last check interval. Allow per-Hub configuration override.
+### 17.8 Multi-Installation Conflict
 
-### 18.2 Grove Status Notification Channel
+**Resolution:** First installation wins. When auto-discovery or a new installation callback finds multiple installations covering the same repository, the grove is associated with the earliest (first) matching installation. The second (and any subsequent) match creates a **warning notification** to the Hub owner about the conflict. The grove owner can manually override the association via grove settings if needed. See §6.3.
 
-**Question:** When a grove's GitHub App status transitions to `error`, the Hub notifies the grove owner. What notification channel(s) should be supported? Options: in-app notification only, email, webhook to external system.
+### 17.9 Status Recovery and Auto-Clear
 
-**Leaning:** Start with in-app notification (visible on the Hub dashboard and grove settings page). Email and external webhook notifications are future work — they need their own design for the notification subsystem.
+**Resolution:** Re-check on agent start. When a grove is in `error` state and an agent is created, the Hub attempts token minting anyway rather than immediately falling back to PAT. If it succeeds, the error is cleared and the grove returns to `ok` status. This provides the fastest recovery path without adding polling overhead. See §4.4.
 
-### 18.3 Multi-Installation Conflict
+### 17.10 Webhook Secret Rotation
 
-**Question:** If two different installations both grant access to the same repository (e.g., the repo owner installs the app on their personal account AND the org also has the app installed), which installation should the grove use?
-
-**Leaning:** Auto-discovery (§6.3) already handles this: "If exactly one match: auto-associate." If multiple matches, the Hub should surface the choice to the grove owner rather than picking arbitrarily. The grove settings page could list available installations and let the owner select.
-
-### 18.4 Status Recovery and Auto-Clear
-
-**Question:** When a grove's GitHub App status is in `error` and the underlying issue is fixed (e.g., the repo is re-added to the installation), how quickly does the status recover? Should the Hub proactively re-check on the next agent start, or wait for the next health check cycle?
-
-**Leaning:** Re-check on agent start. When a grove is in `error` state and an agent is created, the Hub should attempt token minting anyway (rather than immediately falling back to PAT). If it succeeds, clear the error. This provides the fastest recovery path without adding polling overhead.
-
-### 18.5 Webhook Secret Rotation
-
-**Question:** The `webhook_secret` is used to validate incoming GitHub webhooks. How should it be rotated? GitHub doesn't support multiple active webhook secrets simultaneously, so there's a brief window during rotation where webhooks could fail validation.
-
-**Leaning:** Document as a manual rotation procedure: update the secret on GitHub, then immediately update the Hub config. The window is very brief (seconds). During this window, webhook events may be dropped, but the periodic health check provides a safety net. An alternative is to temporarily disable signature validation during rotation, but this trades security for convenience.
+**Resolution:** Manual rotation. The operator updates the webhook secret on GitHub first, then immediately updates the Hub configuration. The window where secrets are mismatched is brief (seconds). During this window, webhook events may be dropped, but the periodic health check (§6.5) provides a safety net for any missed events. Documented in the operations/key rotation runbook alongside private key rotation (§13).
 
 ---
 
-## 19. References
+## 18. References
 
 - **GitHub Docs**: [About GitHub Apps](https://docs.github.com/en/apps/overview)
 - **GitHub Docs**: [Authenticating as a GitHub App](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/about-authentication-with-a-github-app)

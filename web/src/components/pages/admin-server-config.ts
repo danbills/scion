@@ -560,7 +560,6 @@ export class ScionPageAdminServerConfig extends LitElement {
   override connectedCallback(): void {
     super.connectedCallback();
     void this.loadConfig();
-    void this.loadGitHubAppConfig();
     void this.loadGitHubAppInstallations();
   }
 
@@ -576,6 +575,9 @@ export class ScionPageAdminServerConfig extends LitElement {
       const data = (await res.json()) as ServerConfigResponse;
       this.rawConfig = data;
       this.populateForm(data);
+      // Load GitHub App config before releasing the loading gate so values
+      // are present when the form first renders (avoids Shoelace timing issues).
+      await this.loadGitHubAppConfig();
     } catch (e) {
       this.error = 'Failed to connect to server';
     } finally {

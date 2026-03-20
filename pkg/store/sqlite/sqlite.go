@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -3005,11 +3006,22 @@ func (s *SQLiteStore) ListUsers(ctx context.Context, filter store.UserFilter, op
 		limit = 50
 	}
 
+	if limit > 200 {
+		limit = 200
+	}
+
+	offset := 0
+	if opts.Cursor != "" {
+		if parsed, err := strconv.Atoi(opts.Cursor); err == nil && parsed > 0 {
+			offset = parsed
+		}
+	}
+
 	query := fmt.Sprintf(`
 		SELECT id, email, display_name, avatar_url, role, status, preferences, created_at, last_login, last_seen
-		FROM users %s ORDER BY created_at DESC LIMIT ?
+		FROM users %s ORDER BY created_at DESC LIMIT ? OFFSET ?
 	`, whereClause)
-	args = append(args, limit)
+	args = append(args, limit+1, offset)
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -3041,10 +3053,18 @@ func (s *SQLiteStore) ListUsers(ctx context.Context, filter store.UserFilter, op
 		users = append(users, user)
 	}
 
-	return &store.ListResult[store.User]{
+	result := &store.ListResult[store.User]{
 		Items:      users,
 		TotalCount: totalCount,
-	}, nil
+	}
+
+	// Handle pagination: if we got more than limit, there's a next page
+	if len(users) > limit {
+		result.Items = users[:limit]
+		result.NextCursor = strconv.Itoa(offset + limit)
+	}
+
+	return result, nil
 }
 
 // ============================================================================

@@ -45,6 +45,8 @@ const USED_ICONS = [
   'bell',
   'box-arrow-in-right',
   'box-arrow-right',
+  'chevron-left',
+  'chevron-right',
   'check-circle',
   'check-circle-fill',
   'circle',

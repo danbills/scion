@@ -5044,15 +5044,10 @@ func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	totalCount := result.TotalCount
-	if identity != nil {
-		totalCount = len(users)
-	}
-
 	writeJSON(w, http.StatusOK, ListUsersResponse{
 		Users:      users,
 		NextCursor: result.NextCursor,
-		TotalCount: totalCount,
+		TotalCount: result.TotalCount,
 	})
 }
 

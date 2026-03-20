@@ -17,7 +17,7 @@
 /**
  * Admin Users page component
  *
- * Read-only view of all users in the system
+ * Read-only view of all users in the system with pagination
  */
 
 import { LitElement, html, css } from 'lit';
@@ -28,6 +28,8 @@ import '../shared/status-badge.js';
 
 type SortField = 'name' | 'created' | 'lastSeen';
 type SortDir = 'asc' | 'desc';
+
+const PAGE_SIZE = 50;
 
 @customElement('scion-page-admin-users')
 export class ScionPageAdminUsers extends LitElement {
@@ -45,6 +47,18 @@ export class ScionPageAdminUsers extends LitElement {
 
   @state()
   private sortDir: SortDir = 'asc';
+
+  @state()
+  private totalCount = 0;
+
+  @state()
+  private currentPage = 1;
+
+  @state()
+  private nextCursor: string | null = null;
+
+  @state()
+  private cursorHistory: string[] = [];
 
   static override styles = css`
     :host {
@@ -326,6 +340,36 @@ export class ScionPageAdminUsers extends LitElement {
       margin-bottom: 1rem;
     }
 
+    .pagination {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.75rem 1rem;
+      border-top: 1px solid var(--scion-border, #e2e8f0);
+      background: var(--scion-bg-subtle, #f1f5f9);
+    }
+
+    .pagination-info {
+      font-size: 0.8125rem;
+      color: var(--scion-text-muted, #64748b);
+    }
+
+    .pagination-controls {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .pagination-controls sl-button::part(base) {
+      font-size: 0.8125rem;
+    }
+
+    .page-indicator {
+      font-size: 0.8125rem;
+      color: var(--scion-text-muted, #64748b);
+      padding: 0 0.5rem;
+    }
+
     @media (max-width: 768px) {
       .hide-mobile {
         display: none;
@@ -338,12 +382,17 @@ export class ScionPageAdminUsers extends LitElement {
     void this.loadUsers();
   }
 
-  private async loadUsers(): Promise<void> {
+  private async loadUsers(cursor?: string): Promise<void> {
     this.loading = true;
     this.error = null;
 
     try {
-      const response = await fetch('/api/v1/users', {
+      const params = new URLSearchParams({ limit: String(PAGE_SIZE) });
+      if (cursor) {
+        params.set('cursor', cursor);
+      }
+
+      const response = await fetch(`/api/v1/users?${params.toString()}`, {
         credentials: 'include',
       });
 
@@ -352,14 +401,38 @@ export class ScionPageAdminUsers extends LitElement {
         throw new Error(errorData.message || `HTTP ${response.status}: ${response.statusText}`);
       }
 
-      const data = (await response.json()) as { users?: AdminUser[] } | AdminUser[];
+      const data = (await response.json()) as {
+        users?: AdminUser[];
+        nextCursor?: string;
+        totalCount?: number;
+      };
       this.users = Array.isArray(data) ? data : data.users || [];
+      this.nextCursor = (data as { nextCursor?: string }).nextCursor || null;
+      this.totalCount = (data as { totalCount?: number }).totalCount || this.users.length;
     } catch (err) {
       console.error('Failed to load users:', err);
       this.error = err instanceof Error ? err.message : 'Failed to load users';
     } finally {
       this.loading = false;
     }
+  }
+
+  private goToNextPage(): void {
+    if (!this.nextCursor) return;
+    this.cursorHistory = [...this.cursorHistory, this.nextCursor];
+    this.currentPage++;
+    void this.loadUsers(this.nextCursor);
+  }
+
+  private goToPrevPage(): void {
+    if (this.currentPage <= 1) return;
+    this.currentPage--;
+    // Remove the last cursor from history; the one before it is what we navigate to
+    const history = [...this.cursorHistory];
+    history.pop();
+    this.cursorHistory = history;
+    const cursor = this.currentPage === 1 ? undefined : history[history.length - 1];
+    void this.loadUsers(cursor);
   }
 
   private formatRelativeTime(dateString: string | undefined): string {
@@ -435,13 +508,25 @@ export class ScionPageAdminUsers extends LitElement {
     return this.sortField === field ? (this.sortDir === 'asc' ? '▲' : '▼') : '▲';
   }
 
+  private get totalPages(): number {
+    return Math.max(1, Math.ceil(this.totalCount / PAGE_SIZE));
+  }
+
+  private get rangeStart(): number {
+    return (this.currentPage - 1) * PAGE_SIZE + 1;
+  }
+
+  private get rangeEnd(): number {
+    return Math.min(this.currentPage * PAGE_SIZE, this.totalCount);
+  }
+
   override render() {
     return html`
       <div class="header">
         <h1>Users</h1>
         ${!this.loading && !this.error
           ? html`<span class="user-count"
-              >${this.users.length} user${this.users.length !== 1 ? 's' : ''}</span
+              >${this.totalCount} user${this.totalCount !== 1 ? 's' : ''}</span
             >`
           : ''}
       </div>
@@ -486,6 +571,7 @@ export class ScionPageAdminUsers extends LitElement {
     }
 
     const sorted = this.getSortedUsers();
+    const hasPagination = this.totalCount > PAGE_SIZE;
 
     return html`
       <div class="table-container">
@@ -521,6 +607,38 @@ export class ScionPageAdminUsers extends LitElement {
             ${sorted.map((user) => this.renderUserRow(user))}
           </tbody>
         </table>
+        ${hasPagination ? this.renderPagination() : ''}
+      </div>
+    `;
+  }
+
+  private renderPagination() {
+    return html`
+      <div class="pagination">
+        <span class="pagination-info">
+          Showing ${this.rangeStart}-${this.rangeEnd} of ${this.totalCount}
+        </span>
+        <div class="pagination-controls">
+          <sl-button
+            size="small"
+            variant="default"
+            ?disabled=${this.currentPage <= 1}
+            @click=${() => this.goToPrevPage()}
+          >
+            <sl-icon slot="prefix" name="chevron-left"></sl-icon>
+            Previous
+          </sl-button>
+          <span class="page-indicator">Page ${this.currentPage} of ${this.totalPages}</span>
+          <sl-button
+            size="small"
+            variant="default"
+            ?disabled=${!this.nextCursor}
+            @click=${() => this.goToNextPage()}
+          >
+            Next
+            <sl-icon slot="suffix" name="chevron-right"></sl-icon>
+          </sl-button>
+        </div>
       </div>
     `;
   }

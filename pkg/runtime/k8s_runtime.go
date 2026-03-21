@@ -35,6 +35,7 @@ import (
 	"github.com/GoogleCloudPlatform/scion/pkg/k8s"
 	"golang.org/x/term"
 	corev1 "k8s.io/api/core/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -217,6 +218,12 @@ func (r *KubernetesRuntime) Run(ctx context.Context, config RunConfig) (string, 
 	}
 	config.Annotations["scion.namespace"] = namespace
 
+	// Pre-clean stale resources from a previous agent with the same name.
+	// This handles cases where the agent was force-deleted from the hub
+	// or the pod was evicted/GC'd by K8s without proper cleanup.
+	r.cleanupAgentSecrets(ctx, namespace, config.Name)
+	r.cleanupStalePod(ctx, namespace, config.Name)
+
 	// Create K8s Secret or SecretProviderClass before the pod
 	if len(config.ResolvedSecrets) > 0 {
 		useGKEPath := r.GKEMode
@@ -387,6 +394,11 @@ func (r *KubernetesRuntime) createAgentSecret(ctx context.Context, namespace, ag
 	}
 
 	_, err := r.Client.Clientset.CoreV1().Secrets(namespace).Create(ctx, secret, metav1.CreateOptions{})
+	if k8serrors.IsAlreadyExists(err) {
+		// Delete the stale secret and retry
+		_ = r.Client.Clientset.CoreV1().Secrets(namespace).Delete(ctx, secretName, metav1.DeleteOptions{})
+		_, err = r.Client.Clientset.CoreV1().Secrets(namespace).Create(ctx, secret, metav1.CreateOptions{})
+	}
 	if err != nil {
 		return "", fmt.Errorf("failed to create agent secret: %w", err)
 	}
@@ -494,6 +506,10 @@ func (r *KubernetesRuntime) createSecretProviderClass(ctx context.Context, names
 	}
 
 	_, err = r.Client.Dynamic().Resource(k8s.SecretProviderClassGVR).Namespace(namespace).Create(ctx, spc, metav1.CreateOptions{})
+	if k8serrors.IsAlreadyExists(err) {
+		_ = r.Client.Dynamic().Resource(k8s.SecretProviderClassGVR).Namespace(namespace).Delete(ctx, spcName, metav1.DeleteOptions{})
+		_, err = r.Client.Dynamic().Resource(k8s.SecretProviderClassGVR).Namespace(namespace).Create(ctx, spc, metav1.CreateOptions{})
+	}
 	if err != nil {
 		return "", fmt.Errorf("failed to create SecretProviderClass: %w", err)
 	}
@@ -574,6 +590,10 @@ func (r *KubernetesRuntime) createAuthFileSecret(ctx context.Context, namespace,
 	}
 
 	_, err := r.Client.Clientset.CoreV1().Secrets(namespace).Create(ctx, secret, metav1.CreateOptions{})
+	if k8serrors.IsAlreadyExists(err) {
+		_ = r.Client.Clientset.CoreV1().Secrets(namespace).Delete(ctx, secretName, metav1.DeleteOptions{})
+		_, err = r.Client.Clientset.CoreV1().Secrets(namespace).Create(ctx, secret, metav1.CreateOptions{})
+	}
 	if err != nil {
 		return fmt.Errorf("failed to create auth secret: %w", err)
 	}
@@ -1442,10 +1462,22 @@ func (r *KubernetesRuntime) Delete(ctx context.Context, id string) error {
 	err := r.Client.Clientset.CoreV1().Pods(namespace).Delete(ctx, id, metav1.DeleteOptions{
 		GracePeriodSeconds: &gracePeriod,
 	})
-	if err != nil {
+	if err != nil && !k8serrors.IsNotFound(err) {
 		return fmt.Errorf("failed to delete pod: %w", err)
 	}
 	return nil
+}
+
+// cleanupStalePod deletes an existing pod with the given name if it exists.
+// This prevents "already exists" errors when recreating an agent.
+func (r *KubernetesRuntime) cleanupStalePod(ctx context.Context, namespace, podName string) {
+	gracePeriod := int64(0)
+	err := r.Client.Clientset.CoreV1().Pods(namespace).Delete(ctx, podName, metav1.DeleteOptions{
+		GracePeriodSeconds: &gracePeriod,
+	})
+	if err != nil && !k8serrors.IsNotFound(err) {
+		runtimeLog.Debug("Failed to clean up stale pod", "pod", podName, "namespace", namespace, "error", err)
+	}
 }
 
 func (r *KubernetesRuntime) List(ctx context.Context, labelFilter map[string]string) ([]api.AgentInfo, error) {

@@ -17,6 +17,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"testing"
 
 	"github.com/GoogleCloudPlatform/scion/pkg/api"
@@ -541,6 +542,112 @@ func TestCreateSecretProviderClass(t *testing.T) {
 	if labels2["scion.agent"] != "test-agent" {
 		t.Errorf("expected scion.agent label on SPC")
 	}
+}
+
+func TestCreateAgentSecret_AlreadyExists(t *testing.T) {
+	rt, clientset, _ := newTestK8sRuntime()
+	ctx := context.Background()
+
+	secrets := []api.ResolvedSecret{
+		{Name: "KEY", Type: "environment", Target: "KEY", Value: "old-val", Source: "user"},
+	}
+	labels := map[string]string{"scion.name": "test-agent"}
+
+	// Create the secret the first time
+	_, err := rt.createAgentSecret(ctx, "default", "test-agent", secrets, labels)
+	if err != nil {
+		t.Fatalf("first createAgentSecret failed: %v", err)
+	}
+
+	// Create again with updated value — should succeed via delete+recreate
+	secrets[0].Value = "new-val"
+	_, err = rt.createAgentSecret(ctx, "default", "test-agent", secrets, labels)
+	if err != nil {
+		t.Fatalf("second createAgentSecret should handle already-exists: %v", err)
+	}
+
+	// Verify the secret has the new value
+	s, err := clientset.CoreV1().Secrets("default").Get(ctx, "scion-agent-test-agent", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("failed to get secret: %v", err)
+	}
+	if string(s.Data["KEY"]) != "new-val" {
+		t.Errorf("expected new-val, got %s", string(s.Data["KEY"]))
+	}
+}
+
+func TestCreateAuthFileSecret_AlreadyExists(t *testing.T) {
+	rt, clientset, _ := newTestK8sRuntime()
+	ctx := context.Background()
+
+	// Create a temp file for the auth file source
+	tmpFile := t.TempDir() + "/auth.json"
+	if err := writeTestFile(tmpFile, "old-content"); err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+
+	files := []api.FileMapping{{SourcePath: tmpFile, ContainerPath: "/home/scion/.auth"}}
+	labels := map[string]string{"scion.name": "test-agent"}
+
+	// Create the first time
+	err := rt.createAuthFileSecret(ctx, "default", "test-agent", files, labels)
+	if err != nil {
+		t.Fatalf("first createAuthFileSecret failed: %v", err)
+	}
+
+	// Update the file content and create again
+	if err := writeTestFile(tmpFile, "new-content"); err != nil {
+		t.Fatalf("failed to update temp file: %v", err)
+	}
+	err = rt.createAuthFileSecret(ctx, "default", "test-agent", files, labels)
+	if err != nil {
+		t.Fatalf("second createAuthFileSecret should handle already-exists: %v", err)
+	}
+
+	// Verify the secret has the new content
+	s, err := clientset.CoreV1().Secrets("default").Get(ctx, "scion-auth-test-agent", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("failed to get auth secret: %v", err)
+	}
+	if string(s.Data["auth-file-0"]) != "new-content" {
+		t.Errorf("expected new-content, got %s", string(s.Data["auth-file-0"]))
+	}
+}
+
+func TestDelete_PodNotFound_StillCleansSecrets(t *testing.T) {
+	rt, clientset, _ := newTestK8sRuntime()
+	ctx := context.Background()
+
+	// Create a secret labeled for the agent, but no pod
+	secrets := []api.ResolvedSecret{
+		{Name: "KEY", Type: "environment", Target: "KEY", Value: "val", Source: "user"},
+	}
+	labels := map[string]string{"scion.name": "test-agent"}
+	_, err := rt.createAgentSecret(ctx, "default", "test-agent", secrets, labels)
+	if err != nil {
+		t.Fatalf("createAgentSecret failed: %v", err)
+	}
+
+	// Delete should not error even though pod doesn't exist
+	err = rt.Delete(ctx, "test-agent")
+	if err != nil {
+		t.Fatalf("Delete should succeed when pod is not found: %v", err)
+	}
+
+	// Verify secrets were still cleaned up
+	secretList, err := clientset.CoreV1().Secrets("default").List(ctx, metav1.ListOptions{
+		LabelSelector: "scion.agent=test-agent",
+	})
+	if err != nil {
+		t.Fatalf("failed to list secrets: %v", err)
+	}
+	if len(secretList.Items) != 0 {
+		t.Errorf("expected 0 secrets after delete, got %d", len(secretList.Items))
+	}
+}
+
+func writeTestFile(path, content string) error {
+	return os.WriteFile(path, []byte(content), 0644)
 }
 
 func TestCreateSecretProviderClass_NoRefs(t *testing.T) {

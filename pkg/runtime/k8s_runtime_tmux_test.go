@@ -96,28 +96,49 @@ func TestKubernetesRuntime_Run_Tmux(t *testing.T) {
 	}
 
 	// Assertions
-	// Check Command
-	// Expected: sciontool init -- sh -c "tmux new-session -d -s scion -n agent ... \; new-window ... \; select-window ... \; attach-session ..."
+	// Check Command — the pod uses a startup gate pattern:
+	//   Command: ["sh", "-c", "<gate loop that waits for /tmp/.scion-home-ready>"]
+	// The real startup command (sciontool init → tmux) is in the SCION_START_CMD env var.
 	if len(pod.Spec.Containers) == 0 {
 		t.Fatal("Pod has no containers")
 	}
 	cmd := pod.Spec.Containers[0].Command
-	if len(cmd) < 6 {
-		t.Fatalf("Command too short: %v", cmd)
+	if len(cmd) != 3 {
+		t.Fatalf("Expected gate command [sh -c <script>], got %v", cmd)
 	}
-	if cmd[0] != "sciontool" || cmd[1] != "init" || cmd[2] != "--" || cmd[3] != "sh" || cmd[4] != "-c" {
-		t.Errorf("Expected command to start with 'sciontool init -- sh -c', got %v", cmd[:5])
+	if cmd[0] != "sh" || cmd[1] != "-c" {
+		t.Errorf("Expected gate command to start with 'sh -c', got %v", cmd[:2])
 	}
-	// Check if the wrapped command contains tmux session setup and harness command
-	tmuxCmd := cmd[5]
-	if !strings.Contains(tmuxCmd, "tmux new-session -d -s scion -n agent") {
-		t.Errorf("Expected tmux new-session with agent window, got: %s", tmuxCmd)
+	gateScript := cmd[2]
+	if !strings.Contains(gateScript, "/tmp/.scion-home-ready") {
+		t.Errorf("Gate script should poll for /tmp/.scion-home-ready, got: %s", gateScript)
 	}
-	if !strings.Contains(tmuxCmd, "new-window -t scion -n shell") {
-		t.Errorf("Expected shell window creation, got: %s", tmuxCmd)
+	if !strings.Contains(gateScript, "sciontool init") {
+		t.Errorf("Gate script should exec sciontool init, got: %s", gateScript)
 	}
-	if !strings.Contains(tmuxCmd, "/bin/echo") || !strings.Contains(tmuxCmd, "hello") {
-		t.Errorf("Wrapped command does not contain harness command. Got: %s", tmuxCmd)
+	if !strings.Contains(gateScript, "SCION_START_CMD") {
+		t.Errorf("Gate script should reference SCION_START_CMD env var, got: %s", gateScript)
+	}
+
+	// Check that the real tmux command is in the SCION_START_CMD env var
+	var startCmd string
+	for _, env := range pod.Spec.Containers[0].Env {
+		if env.Name == "SCION_START_CMD" {
+			startCmd = env.Value
+			break
+		}
+	}
+	if startCmd == "" {
+		t.Fatal("SCION_START_CMD env var not set")
+	}
+	if !strings.Contains(startCmd, "tmux new-session -d -s scion -n agent") {
+		t.Errorf("Expected tmux new-session with agent window, got: %s", startCmd)
+	}
+	if !strings.Contains(startCmd, "new-window -t scion -n shell") {
+		t.Errorf("Expected shell window creation, got: %s", startCmd)
+	}
+	if !strings.Contains(startCmd, "/bin/echo") || !strings.Contains(startCmd, "hello") {
+		t.Errorf("Wrapped command does not contain harness command. Got: %s", startCmd)
 	}
 
 	// Update Pod to Running to let Run finish
@@ -135,11 +156,13 @@ func TestKubernetesRuntime_Run_Tmux(t *testing.T) {
 		t.Fatalf("failed to update pod status: %v", err)
 	}
 
-	// Wait for Run to return
+	// Wait for Run to return. The fake K8s clientset doesn't support exec,
+	// so the startup gate signal will fail — that's expected in tests. We
+	// only care about the pod spec assertions above.
 	select {
 	case err := <-errChan:
-		if err != nil {
-			t.Errorf("Run failed: %v", err)
+		if err != nil && !strings.Contains(err.Error(), "startup gate") {
+			t.Errorf("Run failed with unexpected error: %v", err)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run timed out waiting for pod ready")

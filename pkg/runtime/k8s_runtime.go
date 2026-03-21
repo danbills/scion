@@ -320,16 +320,12 @@ func (r *KubernetesRuntime) Run(ctx context.Context, config RunConfig) (string, 
 		}
 	}
 
-	// Reload tmux config: unlike Docker (where home is bind-mounted and
-	// available at startup), K8s syncs the home directory after the pod is
-	// running, so tmux starts without .tmux.conf. Tell tmux to source it
-	// now that it exists. Run as the scion user so tmux finds the session.
-	if config.HomeDir != "" {
-		tmuxConf := fmt.Sprintf("/home/%s/.tmux.conf", config.UnixUsername)
-		sourceCmd := fmt.Sprintf("su - %s -c 'test -f %s && tmux source-file %s || true'", config.UnixUsername, tmuxConf, tmuxConf)
-		if _, err := r.execInPod(ctx, namespace, createdPod.Name, []string{"sh", "-c", sourceCmd}); err != nil {
-			runtimeLog.Debug("Failed to reload tmux config (non-fatal)", "error", err)
-		}
+	// Signal the startup gate: all files are synced and ownership is fixed,
+	// so it's safe to launch sciontool init → tmux → harness. The gate loop
+	// in the pod command polls for this marker file (see buildPod for details).
+	runtimeLog.Info("Signaling startup gate", "agent", config.Name, "phase", "startup-gate")
+	if _, err := r.execInPod(ctx, namespace, createdPod.Name, []string{"touch", "/tmp/.scion-home-ready"}); err != nil {
+		return createdPod.Name, fmt.Errorf("failed to signal startup gate: %w", err)
 	}
 
 	runtimeLog.Info("Agent started successfully", "agent", createdPod.Name, "namespace", namespace, "phase", "complete")
@@ -749,16 +745,39 @@ func (r *KubernetesRuntime) buildPod(namespace string, config RunConfig) (*corev
 		"tmux new-session -d -s scion -n agent %s \\; new-window -t scion -n shell \\; select-window -t scion:agent \\; attach-session -t scion",
 		cmdLine,
 	)
-	// Wrap with sciontool init so the container entrypoint runs:
-	// - UID/GID setup (scion user matches host user)
-	// - Privilege drop (child runs as scion, not root)
-	// - Zombie reaping, signal forwarding, heartbeat, telemetry
-	// Without this, the tmux session and harness run as root, and
-	// /home/scion is never used as $HOME.
-	cmd = []string{"sciontool", "init", "--", "sh", "-c", tmuxCmd}
+	// --- K8s Startup Gate ---
+	//
+	// Unlike Docker/Podman where volumes are bind-mounted before the container
+	// starts, K8s requires the pod to be running before we can exec into it to
+	// sync files (home directory, workspace). This creates a chicken-and-egg
+	// problem: the container process (sciontool init → tmux → harness) needs
+	// dotfiles like .zshrc, .tmux.conf, and .gemini/settings.json to be
+	// present at launch, but we can only copy them into a running container.
+	//
+	// Solution: the pod command starts with a lightweight gate loop that polls
+	// for a marker file (/tmp/.scion-home-ready). The broker syncs home +
+	// workspace, fixes ownership, then creates the marker. The gate detects
+	// it and exec's the real entrypoint (sciontool init → tmux → harness)
+	// with all files already in place.
+	//
+	// The real startup command is passed via the SCION_START_CMD env var to
+	// avoid shell quoting issues with the tmux command string.
+	//
+	// Flow:
+	//   1. Pod starts → gate loop (polling /tmp/.scion-home-ready)
+	//   2. Broker syncs home dir → syncs workspace → chowns files
+	//   3. Broker creates /tmp/.scion-home-ready via execInPod
+	//   4. Gate detects marker → exec sciontool init -- sh -c "$SCION_START_CMD"
+	//   5. sciontool init sets up user, drops privileges, launches tmux
+	//
+	gateCmd := `while [ ! -f /tmp/.scion-home-ready ]; do sleep 0.2; done; exec sciontool init -- sh -c "$SCION_START_CMD"`
+	cmd = []string{"sh", "-c", gateCmd}
 
 	// Env Resolution — match local runtimes by including harness env + telemetry env.
-	envVars := []corev1.EnvVar{}
+	envVars := []corev1.EnvVar{
+		// The real startup command, consumed by the gate script above.
+		{Name: "SCION_START_CMD", Value: tmuxCmd},
+	}
 
 	// Harness env (system prompt, agent name, etc.) — parity with buildCommonRunArgs.
 	if config.Harness != nil {
@@ -1967,6 +1986,10 @@ func (r *KubernetesRuntime) Exec(ctx context.Context, id string, cmd []string) (
 // execInPod runs a command in the pod's "agent" container as root (the default
 // K8s exec user). This is used for administrative tasks like chown after syncing files.
 func (r *KubernetesRuntime) execInPod(ctx context.Context, namespace, podName string, cmd []string) (string, error) {
+	// Guard against fake/test clientsets where Config is nil (no real API server).
+	if r.Client.Config == nil {
+		return "", fmt.Errorf("K8s REST config not available (test environment)")
+	}
 	req := r.Client.Clientset.CoreV1().RESTClient().Post().
 		Resource("pods").
 		Name(podName).

@@ -46,6 +46,9 @@ interface CloudLogsResponse {
 
 const MAX_BUFFER = 2000;
 
+/** Google Cloud Logging severity levels in ascending order. */
+const SEVERITY_LEVELS = ['DEFAULT', 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'] as const;
+
 @customElement('scion-agent-log-viewer')
 export class ScionAgentLogViewer extends LitElement {
   @property()
@@ -63,6 +66,7 @@ export class ScionAgentLogViewer extends LitElement {
   @state() private expandedIds = new Set<string>();
   @state() private loaded = false;
   @state() private selectedBrokerId = '';
+  @state() private selectedSeverity = '';
 
   private eventSource: EventSource | null = null;
 
@@ -230,6 +234,9 @@ export class ScionAgentLogViewer extends LitElement {
       if (this.selectedBrokerId) {
         params.set('broker_id', this.selectedBrokerId);
       }
+      if (this.selectedSeverity) {
+        params.set('severity', this.selectedSeverity);
+      }
       const url = `/api/v1/agents/${this.agentId}/cloud-logs?${params.toString()}`;
 
       const res = await apiFetch(url);
@@ -284,6 +291,9 @@ export class ScionAgentLogViewer extends LitElement {
     const params = new URLSearchParams();
     if (this.selectedBrokerId) {
       params.set('broker_id', this.selectedBrokerId);
+    }
+    if (this.selectedSeverity) {
+      params.set('severity', this.selectedSeverity);
     }
     const qs = params.toString();
     const url = `/api/v1/agents/${this.agentId}/cloud-logs/stream${qs ? '?' + qs : ''}`;
@@ -348,6 +358,18 @@ export class ScionAgentLogViewer extends LitElement {
     }
   }
 
+  private handleSeverityFilter(e: Event): void {
+    this.selectedSeverity = (e.target as HTMLSelectElement).value;
+    this.entryMap.clear();
+    this.entries = [];
+    if (this.streaming) {
+      this.stopStream();
+      this.startStream();
+    } else {
+      void this.fetchLogs();
+    }
+  }
+
   private handleRefresh(): void {
     void this.fetchLogs();
   }
@@ -384,6 +406,19 @@ export class ScionAgentLogViewer extends LitElement {
               </sl-select>
             `
           : nothing}
+        <sl-select
+          size="small"
+          placeholder="All severities"
+          clearable
+          value=${this.selectedSeverity}
+          @sl-change=${this.handleSeverityFilter}
+          style="min-width: 9rem"
+        >
+          ${SEVERITY_LEVELS.map(
+            (level) =>
+              html`<sl-option value=${level}>${level} +</sl-option>`
+          )}
+        </sl-select>
         ${this.streaming
           ? html`<span class="stream-indicator"><span class="stream-dot"></span>Streaming</span>`
           : nothing}

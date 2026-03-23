@@ -7,7 +7,8 @@ const ROOT_RADIUS = 10;
 const DIR_RADIUS = 6;
 const FILE_RADIUS = 3;
 const HIGHLIGHT_DURATION = 3000; // ms
-const REVEAL_DURATION = 400; // ms for file materialize animation
+const REVEAL_DURATION = 600; // ms for file materialize animation
+const REVEAL_LABEL_DURATION = 3000; // ms to keep label prominently visible after reveal
 
 export class FileGraph {
   private graph: ForceGraphInstance;
@@ -21,6 +22,11 @@ export class FileGraph {
       .nodeLabel('name')
       .nodeCanvasObject((node, ctx, globalScale) => this.drawNode(node as GraphNode, ctx, globalScale))
       .nodePointerAreaPaint((node, color, ctx) => this.drawNodeArea(node as GraphNode, color, ctx))
+      .linkVisibility((link) => {
+        const src = typeof link.source === 'object' ? link.source as GraphNode : this.nodes.get(link.source as string);
+        const tgt = typeof link.target === 'object' ? link.target as GraphNode : this.nodes.get(link.target as string);
+        return (src?.visible ?? false) && (tgt?.visible ?? false);
+      })
       .linkColor(() => 'rgba(255,255,255,0.15)')
       .linkWidth(1)
       .d3AlphaDecay(0.02)
@@ -193,7 +199,8 @@ export class FileGraph {
         const t = elapsed / REVEAL_DURATION;
         // Elastic ease for a "pop" appearance
         revealScale = elasticOut(t);
-      } else {
+      } else if (elapsed > REVEAL_LABEL_DURATION) {
+        // Clear revealTime after label prominence period ends
         node.revealTime = undefined;
       }
     }
@@ -249,13 +256,15 @@ export class FileGraph {
     ctx.lineWidth = 0.5;
     ctx.stroke();
 
-    // Label (root always visible, others when zoomed in)
-    if ((isRoot || globalScale > 1.5) && revealScale > 0.5) {
+    // Label — always visible for root and recently revealed files, otherwise when zoomed in
+    const recentlyRevealed = node.revealTime !== undefined;
+    if ((isRoot || recentlyRevealed || globalScale > 0.8) && revealScale > 0.5) {
       const fontSize = isRoot ? Math.max(5, 12 / globalScale) : Math.max(3, 10 / globalScale);
       ctx.font = `${isRoot ? 'bold ' : ''}${fontSize}px sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'top';
-      ctx.fillStyle = isRoot ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.7)';
+      const labelAlpha = isRoot ? 0.9 : recentlyRevealed ? 0.9 : 0.7;
+      ctx.fillStyle = `rgba(255,255,255,${labelAlpha})`;
       ctx.fillText(node.name, x, y + scaledR + 2);
     }
 

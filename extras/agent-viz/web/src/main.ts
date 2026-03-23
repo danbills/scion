@@ -49,6 +49,7 @@ function init(): void {
   fileEditRenderer = new FileEditRenderer();
   destroyBeamRenderer = new DestroyBeamRenderer();
   fileEditRenderer.setFileGraph(fileGraph);
+  fileEditRenderer.setAgentRing(agentRing);
 
   // WebSocket
   const ws = new WSClient();

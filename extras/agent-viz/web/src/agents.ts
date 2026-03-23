@@ -25,6 +25,7 @@ export class AgentRing {
   private animationPhase = 0;
   private freezeCount = 0; // reference-counted freeze (multiple beams can overlap)
   private pendingSlots = 0; // slots claimed by in-flight create beams
+  private pendingAngles: number[] = []; // angles of claimed pending slots
 
   init(agentInfos: AgentInfo[], centerX: number, centerY: number): void {
     this.centerX = centerX;
@@ -71,9 +72,7 @@ export class AgentRing {
     }
 
     const now = Date.now();
-    const liveAgents = this.getLiveAgents();
-    const n = liveAgents.length + 1;
-    const angle = (2 * Math.PI * (n - 1)) / n - Math.PI / 2;
+    const angle = this.findBestInsertAngle();
 
     this.agents.set(info.id, {
       info,
@@ -90,9 +89,37 @@ export class AgentRing {
     });
 
     // Release one pending slot if any (beam has delivered)
-    if (this.pendingSlots > 0) this.pendingSlots--;
+    if (this.pendingSlots > 0) {
+      this.pendingSlots--;
+      this.pendingAngles.shift();
+    }
 
     this.redistributeAgents();
+  }
+
+  /** Find the angle in the largest gap between existing agents. First agent goes to top. */
+  private findBestInsertAngle(): number {
+    const liveAgents = this.getLiveAgents();
+    if (liveAgents.length === 0) return -Math.PI / 2; // first agent at top
+
+    const angles = liveAgents.map((a) => normalizeAngle(a.angle));
+    angles.sort((a, b) => a - b);
+
+    // Find largest angular gap
+    let bestGap = 0;
+    let bestMid = 0;
+    for (let i = 0; i < angles.length; i++) {
+      const next = i + 1 < angles.length ? angles[i + 1] : angles[0] + 2 * Math.PI;
+      const gap = next - angles[i];
+      if (gap > bestGap) {
+        bestGap = gap;
+        bestMid = angles[i] + gap / 2;
+      }
+    }
+
+    // Normalize back to [-π, π)
+    if (bestMid >= Math.PI) bestMid -= 2 * Math.PI;
+    return bestMid;
   }
 
   removeAgent(agentId: string): void {
@@ -124,16 +151,39 @@ export class AgentRing {
     const n = liveAgents.length;
     if (n === 0) return;
 
-    // Sort by current angle to preserve ring order — prevents wild swings
+    // Sort by current angle to preserve ring order
     liveAgents.sort((a, b) => normalizeAngle(a.angle) - normalizeAngle(b.angle));
 
+    // Target angles: evenly spaced starting from -π/2
+    const targets: number[] = [];
+    for (let i = 0; i < n; i++) {
+      targets.push((2 * Math.PI * i) / n - Math.PI / 2);
+    }
+
+    // Find the rotation offset that minimizes total angular displacement.
+    // Try all n rotations of the sorted→target assignment and pick the cheapest.
+    let bestOffset = 0;
+    let bestCost = Infinity;
+    for (let offset = 0; offset < n; offset++) {
+      let cost = 0;
+      for (let i = 0; i < n; i++) {
+        cost += angularDistance(liveAgents[i].angle, targets[(i + offset) % n]);
+      }
+      if (cost < bestCost) {
+        bestCost = cost;
+        bestOffset = offset;
+      }
+    }
+
     const now = Date.now();
-    liveAgents.forEach((agent, i) => {
-      const newAngle = (2 * Math.PI * i) / n - Math.PI / 2;
+    for (let i = 0; i < n; i++) {
+      const agent = liveAgents[i];
+      const target = targets[(i + bestOffset) % n];
+      // Use shortest-arc direction to avoid going the long way around
       agent.prevAngle = agent.angle;
-      agent.targetAngle = newAngle;
+      agent.targetAngle = agent.angle + shortestArc(agent.angle, target);
       agent.rebalanceStart = now;
-    });
+    }
   }
 
   /** Freeze agent positions — prevents rebalance animations during beam travel. Reference-counted. */
@@ -162,19 +212,40 @@ export class AgentRing {
 
   /**
    * Claim an estimated ring position for a new agent that doesn't exist yet.
-   * Accounts for existing live agents + previously claimed pending slots.
-   * Returns a position with slight angular jitter so rapid creates don't overlap.
+   * Uses the largest-gap algorithm, including previously claimed pending positions.
    */
   claimNextSlotPosition(): { x: number; y: number } {
     const live = this.getLiveAgents();
-    const totalAfter = live.length + this.pendingSlots + 1;
-    const slotIndex = live.length + this.pendingSlots;
-    this.pendingSlots++;
+    // Collect all occupied angles: live agents + previously claimed pending slots
+    const angles = live.map((a) => normalizeAngle(a.angle));
+    // Add synthetic angles for previously claimed pending slots (evenly distributed in gaps)
+    for (let p = 0; p < this.pendingSlots; p++) {
+      angles.push(normalizeAngle(this.pendingAngles[p] ?? 0));
+    }
+    angles.sort((a, b) => a - b);
 
-    // Distribute evenly with jitter
-    const baseAngle = (2 * Math.PI * slotIndex) / totalAfter - Math.PI / 2;
-    const jitter = (Math.random() - 0.5) * 0.2;
-    const angle = baseAngle + jitter;
+    let angle: number;
+    if (angles.length === 0) {
+      angle = -Math.PI / 2; // first agent at top
+    } else {
+      // Find largest gap
+      let bestGap = 0;
+      let bestMid = 0;
+      for (let i = 0; i < angles.length; i++) {
+        const next = i + 1 < angles.length ? angles[i + 1] : angles[0] + 2 * Math.PI;
+        const gap = next - angles[i];
+        if (gap > bestGap) {
+          bestGap = gap;
+          bestMid = angles[i] + gap / 2;
+        }
+      }
+      if (bestMid >= Math.PI) bestMid -= 2 * Math.PI;
+      angle = bestMid;
+    }
+
+    // Track this pending angle so the next claim avoids it
+    this.pendingAngles.push(normalizeAngle(angle));
+    this.pendingSlots++;
 
     return {
       x: this.centerX + Math.cos(angle) * this.ringRadius,
@@ -221,6 +292,7 @@ export class AgentRing {
     this.agents.clear();
     this.freezeCount = 0;
     this.pendingSlots = 0;
+    this.pendingAngles = [];
   }
 
   draw(ctx: CanvasRenderingContext2D): void {
@@ -425,6 +497,20 @@ export class AgentRing {
 /** Normalize angle to [0, 2π) for consistent sorting. */
 function normalizeAngle(a: number): number {
   return ((a % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+}
+
+/** Shortest signed arc from angle a to angle b. */
+function shortestArc(a: number, b: number): number {
+  let d = b - a;
+  // Wrap to [-π, π]
+  d = ((d + Math.PI) % (2 * Math.PI)) - Math.PI;
+  if (d < -Math.PI) d += 2 * Math.PI;
+  return d;
+}
+
+/** Absolute shortest angular distance between two angles. */
+function angularDistance(a: number, b: number): number {
+  return Math.abs(shortestArc(a, b));
 }
 
 // Easing functions

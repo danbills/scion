@@ -114,7 +114,6 @@ func ParseLogFile(path string) (*ParseResult, error) {
 	})
 
 	agents := extractAgents(entries)
-	files := extractFiles(entries)
 	events := extractEvents(entries, agents)
 	timeRange := extractTimeRange(entries)
 
@@ -125,7 +124,7 @@ func ParseLogFile(path string) (*ParseResult, error) {
 		Type:      "manifest",
 		TimeRange: timeRange,
 		Agents:    agents,
-		Files:     files,
+		Files:     []FileNode{}, // Files are added dynamically via events
 		GroveID:   groveID,
 		GroveName: groveName,
 	}
@@ -168,12 +167,27 @@ func extractAgents(entries []GCPLogEntry) []AgentInfo {
 	// Track which IDs had explicit lifecycle events (pre_start)
 	hasLifecycle := make(map[string]bool)
 
-	// First pass: find agent names and IDs from message events.
-	// Messages reference agents by slug name (sender/recipient) and UUID (sender_id/recipient_id).
+	// First pass: find agent names and IDs from server "Agent created" logs and message events.
 	for _, e := range entries {
 		logName := logBaseName(e.LogName)
+		jp := e.JSONPayload
+
+		// scion-server "Agent created" logs carry name, slug, and agent_id
+		if logName == "scion-server" && getStr(jp, "message") == "Agent created" {
+			aid := getStr(jp, "agent_id")
+			if aid == "" {
+				aid = e.Labels["agent_id"]
+			}
+			name := getStr(jp, "slug")
+			if name == "" {
+				name = getStr(jp, "name")
+			}
+			if aid != "" && name != "" {
+				nameMap[aid] = name
+			}
+		}
+
 		if logName == "scion-messages" {
-			jp := e.JSONPayload
 			for _, field := range []string{"sender", "recipient"} {
 				val := getStr(jp, field)
 				if val == "" {
@@ -526,6 +540,15 @@ func extractEvents(entries []GCPLogEntry, agents []AgentInfo) []PlaybackEvent {
 						Phase:   "starting",
 					},
 				})
+			case "agent.lifecycle.post_start":
+				events = append(events, PlaybackEvent{
+					Type:      "agent_state",
+					Timestamp: ts,
+					Data: AgentStateEvent{
+						AgentID: aid,
+						Phase:   "running",
+					},
+				})
 			case "agent.lifecycle.pre_stop":
 				events = append(events, PlaybackEvent{
 					Type:      "agent_state",
@@ -533,6 +556,15 @@ func extractEvents(entries []GCPLogEntry, agents []AgentInfo) []PlaybackEvent {
 					Data: AgentStateEvent{
 						AgentID: aid,
 						Phase:   "stopping",
+					},
+				})
+				events = append(events, PlaybackEvent{
+					Type:      "agent_destroy",
+					Timestamp: ts,
+					Data: AgentLifecycleEvent{
+						AgentID: aid,
+						Name:    agentNameByID[aid],
+						Action:  "destroy",
 					},
 				})
 			case "Tool requires confirmation":

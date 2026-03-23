@@ -98,28 +98,31 @@ function handleManifest(m: PlaybackManifest): void {
     title.textContent = m.groveName || m.groveId || 'Agent Visualizer';
   }
 
-  // Initialize file graph
-  fileGraph.init(m.files);
+  // Initialize file graph empty — files are added dynamically via events
+  fileGraph.init([]);
 
-  // Initialize agent ring
+  // Initialize agent ring empty — agents are added via agent_create events
   const w = overlayCanvas.width;
   const h = overlayCanvas.height;
   console.log('[agent-viz] Canvas dimensions:', w, 'x', h);
-  agentRing.init(m.agents, w / 2, h / 2);
+  agentRing.init([], w / 2, h / 2);
 
   // Set up playback controls
   playbackControls.setTimeRange(m.timeRange.start, m.timeRange.end);
   playbackControls.setAgents(m.agents);
 
   // Update info display
+  updateInfoDisplay();
+}
+
+function updateInfoDisplay(): void {
   const info = document.getElementById('info-display');
   if (info) {
-    info.textContent = `${m.agents.length} agents | ${m.files.length} files`;
+    info.textContent = `${manifest?.agents.length ?? 0} agents`;
   }
 }
 
 function handleEvent(evt: PlaybackEvent): void {
-  console.log('[agent-viz] Event:', evt.type, evt.data);
   switch (evt.type) {
     case 'agent_state':
       agentRing.updateState(evt.data as AgentStateEvent);
@@ -139,14 +142,12 @@ function handleEvent(evt: PlaybackEvent): void {
     }
     case 'agent_create': {
       const lifecycle = evt.data as AgentLifecycleEvent;
-      // Dynamically add agent to the ring if not already present
       const agentInManifest = manifest?.agents.find(
         (a) => a.id === lifecycle.agentId || a.name === lifecycle.name
       );
       if (agentInManifest) {
         agentRing.addAgent(agentInManifest);
       } else {
-        // Agent not in manifest — create an ad-hoc entry
         agentRing.addAgent({
           id: lifecycle.agentId,
           name: lifecycle.name || lifecycle.agentId.substring(0, 8),
@@ -161,13 +162,16 @@ function handleEvent(evt: PlaybackEvent): void {
       });
       break;
     }
-    case 'agent_destroy':
+    case 'agent_destroy': {
+      const lifecycle = evt.data as AgentLifecycleEvent;
       agentRing.updateState({
-        agentId: (evt.data as AgentLifecycleEvent).agentId,
+        agentId: lifecycle.agentId,
         phase: 'stopped',
         activity: 'completed',
       });
+      agentRing.removeAgent(lifecycle.agentId);
       break;
+    }
   }
 }
 

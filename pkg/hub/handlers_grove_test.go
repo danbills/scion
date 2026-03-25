@@ -1693,3 +1693,88 @@ func TestGroveRegister_ExistingGrove_CreatesMembershipGroup(t *testing.T) {
 	assert.True(t, ownerIDs["original-creator-id"], "original creator should be an owner")
 	assert.True(t, ownerIDs[DevUserID], "linking user should be an owner")
 }
+
+// =============================================================================
+// Git-Workspace Hybrid (Shared Workspace Mode) Tests
+// =============================================================================
+
+func TestCreateGrove_SharedWorkspace_SetsLabelAndInitFilesystem(t *testing.T) {
+	srv, _ := testServer(t)
+
+	body := CreateGroveRequest{
+		Name:          "Shared WS Grove",
+		GitRemote:     "github.com/test/shared-ws",
+		WorkspaceMode: "shared",
+	}
+
+	rec := doRequest(t, srv, http.MethodPost, "/api/v1/groves", body)
+	require.Equal(t, http.StatusCreated, rec.Code, "body: %s", rec.Body.String())
+
+	var grove store.Grove
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&grove))
+
+	assert.Equal(t, "github.com/test/shared-ws", grove.GitRemote)
+	assert.Equal(t, store.WorkspaceModeShared, grove.Labels[store.LabelWorkspaceMode],
+		"shared workspace label should be set")
+	assert.True(t, grove.IsSharedWorkspace(), "grove should report as shared workspace")
+
+	// Verify filesystem was initialized (like hub-native groves)
+	workspacePath, err := hubNativeGrovePath(grove.Slug)
+	require.NoError(t, err)
+
+	scionDir := filepath.Join(workspacePath, ".scion")
+	settingsPath := filepath.Join(scionDir, "settings.yaml")
+	_, err = os.Stat(settingsPath)
+	assert.NoError(t, err, "settings.yaml should exist for shared-workspace grove")
+
+	t.Cleanup(func() {
+		os.RemoveAll(workspacePath)
+	})
+}
+
+func TestCreateGrove_PerAgentGit_NoWorkspaceLabel(t *testing.T) {
+	srv, _ := testServer(t)
+
+	body := CreateGroveRequest{
+		Name:      "Per-Agent Git Grove",
+		GitRemote: "github.com/test/per-agent",
+	}
+
+	rec := doRequest(t, srv, http.MethodPost, "/api/v1/groves", body)
+	require.Equal(t, http.StatusCreated, rec.Code, "body: %s", rec.Body.String())
+
+	var grove store.Grove
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&grove))
+
+	assert.Empty(t, grove.Labels[store.LabelWorkspaceMode],
+		"per-agent git grove should not have workspace mode label")
+	assert.False(t, grove.IsSharedWorkspace())
+}
+
+func TestPopulateAgentConfig_SharedWorkspace_SetsWorkspaceNotClone(t *testing.T) {
+	srv, _ := testServer(t)
+
+	grove := &store.Grove{
+		ID:        "grove-shared-ws",
+		Name:      "Shared WS",
+		Slug:      "shared-ws",
+		GitRemote: "github.com/test/shared",
+		Labels: map[string]string{
+			store.LabelWorkspaceMode: store.WorkspaceModeShared,
+		},
+	}
+
+	agent := &store.Agent{
+		ID:            "agent-shared",
+		AppliedConfig: &store.AgentAppliedConfig{},
+	}
+
+	srv.populateAgentConfig(agent, grove, nil)
+
+	expectedPath, err := hubNativeGrovePath("shared-ws")
+	require.NoError(t, err)
+	assert.Equal(t, expectedPath, agent.AppliedConfig.Workspace,
+		"Workspace should be set for shared-workspace git groves")
+	assert.Nil(t, agent.AppliedConfig.GitClone,
+		"GitClone should NOT be set for shared-workspace git groves")
+}

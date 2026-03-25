@@ -670,8 +670,8 @@ func (s *Server) syncHubNativeWorkspaceBack(ctx context.Context, agent *store.Ag
 		return
 	}
 
-	// Only applies to hub-native groves (no git remote)
-	if grove.GitRemote != "" {
+	// Only applies to hub-native and shared-workspace groves
+	if grove.GitRemote != "" && !grove.IsSharedWorkspace() {
 		return
 	}
 

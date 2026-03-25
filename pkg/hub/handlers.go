@@ -708,10 +708,10 @@ func (s *Server) createAgentInGrove(
 		}
 	}
 
-	// Hub-native grove remote broker support: if the grove has no git remote
-	// (hub-native) and the workspace is set, upload it to GCS so a remote broker
-	// can download it. This mirrors the workspace bootstrap pattern above.
-	if grove.GitRemote == "" && agent.AppliedConfig != nil && agent.AppliedConfig.Workspace != "" {
+	// Hub-native/shared-workspace grove remote broker support: if the grove has
+	// a managed workspace and the workspace path is set, upload it to GCS so
+	// a remote broker can download it.
+	if (grove.GitRemote == "" || grove.IsSharedWorkspace()) && agent.AppliedConfig != nil && agent.AppliedConfig.Workspace != "" {
 		hasLocalPath := false
 		if runtimeBrokerID != "" {
 			provider, err := s.store.GetGroveProvider(ctx, grove.ID, runtimeBrokerID)
@@ -2290,12 +2290,13 @@ type ListGrovesResponse struct {
 }
 
 type CreateGroveRequest struct {
-	ID         string            `json:"id,omitempty"`
-	Slug       string            `json:"slug,omitempty"`
-	Name       string            `json:"name"`
-	GitRemote  string            `json:"gitRemote,omitempty"`
-	Visibility string            `json:"visibility,omitempty"`
-	Labels     map[string]string `json:"labels,omitempty"`
+	ID            string            `json:"id,omitempty"`
+	Slug          string            `json:"slug,omitempty"`
+	Name          string            `json:"name"`
+	GitRemote     string            `json:"gitRemote,omitempty"`
+	WorkspaceMode string            `json:"workspaceMode,omitempty"` // "shared" or "per-agent" (default); only meaningful when gitRemote is set
+	Visibility    string            `json:"visibility,omitempty"`
+	Labels        map[string]string `json:"labels,omitempty"`
 }
 
 type RegisterGroveRequest struct {
@@ -2484,6 +2485,14 @@ func (s *Server) createGrove(w http.ResponseWriter, r *http.Request) {
 		slug = api.Slugify(req.Name)
 	}
 
+	// Apply workspace mode label for git groves with shared workspace mode.
+	if normalizedRemote != "" && req.WorkspaceMode == store.WorkspaceModeShared {
+		if req.Labels == nil {
+			req.Labels = make(map[string]string)
+		}
+		req.Labels[store.LabelWorkspaceMode] = store.WorkspaceModeShared
+	}
+
 	grove := &store.Grove{
 		ID:         groveID,
 		Name:       req.Name,
@@ -2514,11 +2523,13 @@ func (s *Server) createGrove(w http.ResponseWriter, r *http.Request) {
 	// Create grove members group and policy (best-effort)
 	s.createGroveMembersGroupAndPolicy(ctx, grove)
 
-	// Initialize filesystem workspace for hub-native groves (no git remote).
-	if grove.GitRemote == "" {
+	// Initialize filesystem workspace for hub-native groves (no git remote)
+	// and shared-workspace git groves (git remote + shared mode).
+	if grove.GitRemote == "" || grove.IsSharedWorkspace() {
 		if err := s.initHubNativeGrove(grove); err != nil {
-			slog.Warn("failed to initialize hub-native grove workspace",
-				"grove_id", grove.ID, "slug", grove.Slug, "error", err)
+			slog.Warn("failed to initialize grove workspace",
+				"grove_id", grove.ID, "slug", grove.Slug,
+				"shared_workspace", grove.IsSharedWorkspace(), "error", err)
 		}
 	}
 
@@ -2759,8 +2770,8 @@ func (s *Server) syncWorkspaceOnStop(ctx context.Context, agent *store.Agent) {
 	}
 
 	grove, err := s.store.GetGrove(ctx, agent.GroveID)
-	if err != nil || grove.GitRemote != "" {
-		return // Not hub-native or grove not found
+	if err != nil || (grove.GitRemote != "" && !grove.IsSharedWorkspace()) {
+		return // Not hub-native/shared-workspace or grove not found
 	}
 
 	// Check if broker is co-located (embedded or has local path)
@@ -3873,10 +3884,10 @@ func (s *Server) deleteGrove(w http.ResponseWriter, r *http.Request, id string) 
 	// Clean up grove-scoped harness configs (best-effort), including storage files.
 	s.deleteGroveHarnessConfigs(ctx, id)
 
-	// For hub-native groves, notify provider brokers to clean up their
-	// local grove directories. This must run before DeleteGrove because
+	// For hub-native and shared-workspace groves, notify provider brokers to clean up
+	// their local grove directories. This must run before DeleteGrove because
 	// the cascade deletes the grove_providers we need to enumerate.
-	if grove.GitRemote == "" {
+	if grove.GitRemote == "" || grove.IsSharedWorkspace() {
 		s.cleanupBrokerGroveDirectories(ctx, grove)
 	}
 
@@ -3885,8 +3896,8 @@ func (s *Server) deleteGrove(w http.ResponseWriter, r *http.Request, id string) 
 		return
 	}
 
-	// For hub-native groves (no git remote), remove the filesystem directory.
-	if grove.GitRemote == "" && grove.Slug != "" {
+	// For hub-native and shared-workspace groves, remove the filesystem directory.
+	if (grove.GitRemote == "" || grove.IsSharedWorkspace()) && grove.Slug != "" {
 		if grovePath, err := hubNativeGrovePath(grove.Slug); err == nil {
 			if err := util.RemoveAllSafe(grovePath); err != nil {
 				slog.Warn("failed to remove hub-native grove directory",
@@ -7074,8 +7085,9 @@ func (s *Server) populateAgentConfig(agent *store.Agent, grove *store.Grove, res
 		return
 	}
 
-	// Populate GitClone config for git-anchored groves.
-	if grove != nil && grove.GitRemote != "" {
+	// Populate GitClone config for git-anchored groves (per-agent clone mode).
+	// Shared-workspace git groves skip clone — agents mount the shared workspace instead.
+	if grove != nil && grove.GitRemote != "" && !grove.IsSharedWorkspace() {
 		cloneURL := grove.Labels["scion.dev/clone-url"]
 		if cloneURL == "" {
 			cloneURL = "https://" + grove.GitRemote + ".git"
@@ -7096,8 +7108,8 @@ func (s *Server) populateAgentConfig(agent *store.Agent, grove *store.Grove, res
 		}
 	}
 
-	// Populate workspace path for hub-native groves (no git remote).
-	if grove != nil && grove.GitRemote == "" {
+	// Populate workspace path for hub-native groves and shared-workspace git groves.
+	if grove != nil && (grove.GitRemote == "" || grove.IsSharedWorkspace()) {
 		workspacePath, err := hubNativeGrovePath(grove.Slug)
 		if err == nil {
 			agent.AppliedConfig.Workspace = workspacePath

@@ -863,6 +863,77 @@ func TestSharedDirFiles_GitGroveMultipleProviders(t *testing.T) {
 	t.Cleanup(func() { os.RemoveAll(workspacePath) })
 }
 
+// =============================================================================
+// Shared Workspace (Git-Workspace Hybrid) Tests
+// =============================================================================
+
+// createTestSharedWorkspaceGrove creates a shared-workspace git grove via the API.
+func createTestSharedWorkspaceGrove(t *testing.T, srv *Server, name, remote string) (*store.Grove, string) {
+	t.Helper()
+
+	rec := doRequest(t, srv, http.MethodPost, "/api/v1/groves", CreateGroveRequest{
+		Name:          name,
+		GitRemote:     remote,
+		WorkspaceMode: "shared",
+	})
+	require.Equal(t, http.StatusCreated, rec.Code, "body: %s", rec.Body.String())
+
+	var grove store.Grove
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&grove))
+
+	workspacePath, err := hubNativeGrovePath(grove.Slug)
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		scionDir := filepath.Join(workspacePath, ".scion")
+		if extAgentsDir, err := config.GetGitGroveExternalAgentsDir(scionDir); err == nil && extAgentsDir != "" {
+			os.RemoveAll(filepath.Dir(filepath.Dir(extAgentsDir)))
+		}
+		os.RemoveAll(workspacePath)
+	})
+
+	return &grove, workspacePath
+}
+
+func TestGroveWorkspaceList_SharedWorkspaceAllowed(t *testing.T) {
+	srv, _ := testServer(t)
+	grove, workspacePath := createTestSharedWorkspaceGrove(t, srv, "Shared List", "github.com/test/shared-list")
+
+	// Create a test file in the workspace
+	require.NoError(t, os.MkdirAll(workspacePath, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspacePath, "hello.txt"), []byte("hello"), 0644))
+
+	rec := doRequest(t, srv, http.MethodGet, fmt.Sprintf("/api/v1/groves/%s/workspace/files", grove.ID), nil)
+	assert.Equal(t, http.StatusOK, rec.Code, "shared-workspace grove should allow file listing")
+
+	var resp GroveWorkspaceListResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	assert.GreaterOrEqual(t, resp.TotalCount, 1, "should list at least the created file")
+}
+
+func TestGroveWorkspaceUpload_SharedWorkspaceAllowed(t *testing.T) {
+	srv, _ := testServer(t)
+	grove, _ := createTestSharedWorkspaceGrove(t, srv, "Shared Upload", "github.com/test/shared-upload")
+
+	files := map[string][]byte{
+		"test.txt": []byte("shared workspace upload"),
+	}
+	rec := doMultipartRequest(t, srv, http.MethodPost, fmt.Sprintf("/api/v1/groves/%s/workspace/files", grove.ID), files)
+	assert.Equal(t, http.StatusOK, rec.Code, "shared-workspace grove should allow file upload")
+}
+
+func TestGroveWorkspaceArchive_SharedWorkspaceAllowed(t *testing.T) {
+	srv, _ := testServer(t)
+	grove, workspacePath := createTestSharedWorkspaceGrove(t, srv, "Shared Archive", "github.com/test/shared-archive")
+
+	// Create a test file
+	require.NoError(t, os.MkdirAll(workspacePath, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspacePath, "file.txt"), []byte("archive me"), 0644))
+
+	rec := doRequest(t, srv, http.MethodGet, fmt.Sprintf("/api/v1/groves/%s/workspace/archive", grove.ID), nil)
+	assert.Equal(t, http.StatusOK, rec.Code, "shared-workspace grove should allow workspace archive")
+}
+
 // Ensure the store's ErrNotFound is wired correctly for grove lookups.
 
 func init() {

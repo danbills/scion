@@ -138,6 +138,15 @@ const (
 	GroveTypeHubNative = "hub-native" // Hub-native workspace
 )
 
+// Workspace mode constants for git groves.
+// When a git grove has the workspace mode label set to "shared", it uses a
+// single shared clone mounted by all agents instead of per-agent clones.
+const (
+	LabelWorkspaceMode    = "scion.dev/workspace-mode"
+	WorkspaceModeShared   = "shared"
+	WorkspaceModePerAgent = "per-agent"
+)
+
 // Grove represents a project/agent group in the Hub database.
 type Grove struct {
 	// Identity
@@ -182,6 +191,12 @@ type Grove struct {
 	ActiveBrokerCount int    `json:"activeBrokerCount,omitempty"`
 	GroveType         string `json:"groveType,omitempty"` // "git", "linked", or "hub-native"
 	OwnerName         string `json:"ownerName,omitempty"` // Enriched: resolved from OwnerID
+}
+
+// IsSharedWorkspace returns true if this is a git grove configured to use a
+// single shared workspace clone instead of per-agent clones.
+func (g *Grove) IsSharedWorkspace() bool {
+	return g.GitRemote != "" && g.Labels[LabelWorkspaceMode] == WorkspaceModeShared
 }
 
 // RuntimeBroker represents a compute node in the Hub database.

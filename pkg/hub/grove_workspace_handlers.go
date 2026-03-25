@@ -81,9 +81,9 @@ func (s *Server) handleGroveWorkspace(w http.ResponseWriter, r *http.Request, gr
 		return
 	}
 
-	// Only hub-native groves (no git remote) have a managed workspace
-	if grove.GitRemote != "" {
-		Conflict(w, "Workspace file management is only available for hub-native groves")
+	// Only hub-native groves and shared-workspace git groves have a managed workspace
+	if grove.GitRemote != "" && !grove.IsSharedWorkspace() {
+		Conflict(w, "Workspace file management is only available for hub-native and shared-workspace groves")
 		return
 	}
 
@@ -393,9 +393,9 @@ func (s *Server) handleGroveWorkspaceArchive(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Only hub-native groves (no git remote) have a managed workspace
-	if grove.GitRemote != "" {
-		Conflict(w, "Workspace file management is only available for hub-native groves")
+	// Only hub-native groves and shared-workspace git groves have a managed workspace
+	if grove.GitRemote != "" && !grove.IsSharedWorkspace() {
+		Conflict(w, "Workspace file management is only available for hub-native and shared-workspace groves")
 		return
 	}
 

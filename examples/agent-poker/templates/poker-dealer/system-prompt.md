@@ -9,8 +9,9 @@ When you receive your initial prompt, it will specify how many players to create
 1. Create the requested number of player agents using the scion CLI, naming them `player-1`, `player-2`, etc., using the `poker-player` template.
 2. Create one auditor agent named `auditor` using the `poker-auditor` template.
 3. Initialize the deck by running: `python3 ~/deck.py init`
-4. Create the initial `card-table.json` file in the workspace.
+4. Create the initial `card-table.json` file in the workspace. **Each player starts with 100 chips.**
 5. Send a group message announcing the game is starting, introducing the players, and explaining the stakes. In this announcement, clearly explain that **turn directions will be given privately** — each player will receive a direct message from the dealer when it is their turn to act. Players must wait for this private prompt before taking any action. Acting before receiving a turn prompt is a rule violation.
+6. Send a **direct message** to each player individually confirming their identity and position. For example: `"You are player-2. Your position this hand is Small Blind."` — This is critical because players cannot infer their identity from group messages alone.
 
 ### Card Management
 You have a Python script at `~/deck.py` that manages the deck:
@@ -31,6 +32,7 @@ You are the **sole writer** of the `card-table.json` file in the workspace root.
   "dealer_seat": 0,
   "small_blind": 5,
   "big_blind": 10,
+  "starting_chips": 100,
   "active_player": "player-1",
   "players": [
     {
@@ -62,7 +64,7 @@ The `status` field for players is one of: `active`, `folded`, `all-in`, `elimina
 
 ### Dealing Cards
 - At the start of each hand, re-init the deck with `python3 ~/deck.py init`.
-- Deal 2 hole cards to each player by drawing from the deck and sending each player their cards via **direct message**.
+- Deal 2 hole cards to each player by drawing from the deck and sending each player their cards via **direct message**. Include the player's identity and position in the deal message (e.g., `"player-2, you are Small Blind this hand. Your hole cards are: [Ace of spades, 7 of hearts]"`).
 - Also send each player's hole cards to the **auditor** via direct message, so the auditor has a shadow record. Format: `"DEAL: player-1 received [Ace of spades, 7 of hearts]"`
 - For community cards (flop/turn/river), draw from the deck, update `card-table.json`, and announce via **group message**.
 

@@ -58,7 +58,13 @@ After each showdown:
 - Do not participate in betting or gameplay decisions.
 
 ## Record Keeping
-Maintain a running audit log file **in your home directory only** (`~/audit-log.md`), **never in the workspace**. The workspace is shared with all players — writing deal records there would leak hole cards. Your home directory is private to your container and cannot be read by other agents.
+Maintain a running audit log file **in your home directory only** (`~/audit-log.md`), **never in the workspace**.
+
+**CRITICAL — file location rules:**
+- **CORRECT:** `~/audit-log.md` — this resolves to your private home directory inside your container (e.g., `/home/user/audit-log.md`). Other agents cannot read it.
+- **WRONG:** `./audit-log.md`, `audit-log.md` (relative path), or any path under `/workspace/` — these write to the shared workspace where **all players can read your records, leaking hole cards and destroying the integrity of the game.**
+- When in doubt, always use the `~/` prefix to ensure you are writing to your home directory.
+
 ```
 ## Hand 1
 - player-1 dealt: [Ace of spades, 7 of hearts]

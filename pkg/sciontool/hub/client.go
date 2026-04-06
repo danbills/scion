@@ -639,16 +639,31 @@ func (c *Client) StartGitHubTokenRefresh(ctx context.Context, config *GitHubToke
 				continue
 			}
 
-			// Write the fresh token to the token file
+			// Write the fresh token and expiry to the token file
 			if config.TokenPath != "" {
 				if writeErr := WriteGitHubTokenFile(config.TokenPath, newToken); writeErr != nil {
 					if config.OnError != nil {
 						config.OnError(fmt.Errorf("failed to write GitHub token file: %w", writeErr))
 					}
-				} else if config.ChownUID > 0 {
-					if chownErr := os.Chown(config.TokenPath, config.ChownUID, config.ChownGID); chownErr != nil {
+				} else {
+					// Write the companion expiry file so the credential helper
+					// (a separate process) can detect stale tokens.
+					if expiryErr := WriteGitHubTokenExpiry(config.TokenPath, newExpiry); expiryErr != nil {
 						if config.OnError != nil {
-							config.OnError(fmt.Errorf("failed to chown GitHub token file: %w", chownErr))
+							config.OnError(fmt.Errorf("failed to write GitHub token expiry file: %w", expiryErr))
+						}
+					}
+					if config.ChownUID > 0 {
+						if chownErr := os.Chown(config.TokenPath, config.ChownUID, config.ChownGID); chownErr != nil {
+							if config.OnError != nil {
+								config.OnError(fmt.Errorf("failed to chown GitHub token file: %w", chownErr))
+							}
+						}
+						expiryPath := GitHubTokenExpiryPath(config.TokenPath)
+						if chownErr := os.Chown(expiryPath, config.ChownUID, config.ChownGID); chownErr != nil {
+							if config.OnError != nil {
+								config.OnError(fmt.Errorf("failed to chown GitHub token expiry file: %w", chownErr))
+							}
 						}
 					}
 				}
@@ -700,6 +715,43 @@ func ReadGitHubTokenFile(path string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(data))
+}
+
+// GitHubTokenExpiryPath returns the companion expiry file path for a token file.
+func GitHubTokenExpiryPath(tokenPath string) string {
+	return tokenPath + ".expiry"
+}
+
+// WriteGitHubTokenExpiry writes the token expiry time to a companion file
+// alongside the token file. This allows the credential helper (a separate
+// process) to check whether the cached token is still valid.
+func WriteGitHubTokenExpiry(tokenPath string, expiry time.Time) error {
+	expiryPath := GitHubTokenExpiryPath(tokenPath)
+	return os.WriteFile(expiryPath, []byte(expiry.Format(time.RFC3339)), 0600)
+}
+
+// ReadGitHubTokenExpiry reads the token expiry time from the companion expiry
+// file. Returns zero time and an error if the file doesn't exist or can't be
+// parsed.
+func ReadGitHubTokenExpiry(tokenPath string) (time.Time, error) {
+	expiryPath := GitHubTokenExpiryPath(tokenPath)
+	data, err := os.ReadFile(expiryPath)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return time.Parse(time.RFC3339, strings.TrimSpace(string(data)))
+}
+
+// IsGitHubTokenExpired checks whether the token at the given path has expired
+// by reading the companion expiry file. Returns true if the token is expired
+// or if the expiry cannot be determined (missing/corrupt expiry file).
+func IsGitHubTokenExpired(tokenPath string) bool {
+	expiry, err := ReadGitHubTokenExpiry(tokenPath)
+	if err != nil {
+		// Can't determine expiry — treat as expired to be safe
+		return true
+	}
+	return time.Now().After(expiry)
 }
 
 // GitHubTokenPath returns the configured GitHub token file path from env,

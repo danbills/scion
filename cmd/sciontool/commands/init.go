@@ -512,6 +512,16 @@ func runInit(args []string) int {
 				if err != nil {
 					log.Error("Failed to parse GitHub token expiry %q: %v", expiryStr, err)
 				} else {
+					// Write the initial expiry so the credential helper can
+					// detect stale tokens even before the first refresh cycle.
+					if err := hub.WriteGitHubTokenExpiry(tokenPath, ghTokenExpiry); err != nil {
+						log.Error("Failed to write initial GitHub token expiry file: %v", err)
+					} else if targetUID > 0 {
+						expiryPath := hub.GitHubTokenExpiryPath(tokenPath)
+						if err := os.Chown(expiryPath, targetUID, targetGID); err != nil {
+							log.Error("Failed to chown GitHub token expiry file to UID=%d: %v", targetUID, err)
+						}
+					}
 					// Schedule first refresh 10 minutes before expiry (tokens last 1 hour)
 					ghRefreshAt := ghTokenExpiry.Add(-10 * time.Minute)
 					if ghRefreshAt.Before(time.Now()) {

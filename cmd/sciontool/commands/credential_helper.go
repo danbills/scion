@@ -62,7 +62,15 @@ func runCredentialHelper() {
 	tokenPath := hub.GitHubTokenPath()
 	token := hub.ReadGitHubTokenFile(tokenPath)
 
-	// If no token in file, try on-demand refresh from Hub
+	// Check whether the cached token is expired. If so, discard it and
+	// force an on-demand refresh from the Hub rather than returning a
+	// stale token that will be rejected by GitHub.
+	if token != "" && hub.IsGitHubTokenExpired(tokenPath) {
+		log.Debug("credential-helper: cached token is expired, forcing on-demand refresh")
+		token = ""
+	}
+
+	// If no valid token in file, try on-demand refresh from Hub
 	if token == "" {
 		hubClient := hub.NewClient()
 		if hubClient != nil && hubClient.IsConfigured() {

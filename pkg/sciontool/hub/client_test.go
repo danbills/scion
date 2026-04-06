@@ -1096,6 +1096,90 @@ func TestClient_StartGitHubTokenRefresh(t *testing.T) {
 	})
 }
 
+func TestGitHubTokenExpiry_WriteAndRead(t *testing.T) {
+	tmpDir := t.TempDir()
+	tokenPath := tmpDir + "/github-token"
+
+	t.Run("read returns error when no expiry file", func(t *testing.T) {
+		_, err := ReadGitHubTokenExpiry(tokenPath)
+		assert.Error(t, err)
+	})
+
+	t.Run("write and read round-trip", func(t *testing.T) {
+		expiry := time.Date(2026, 4, 7, 12, 0, 0, 0, time.UTC)
+		err := WriteGitHubTokenExpiry(tokenPath, expiry)
+		require.NoError(t, err)
+
+		got, err := ReadGitHubTokenExpiry(tokenPath)
+		require.NoError(t, err)
+		assert.True(t, expiry.Equal(got), "expected %v, got %v", expiry, got)
+	})
+
+	t.Run("expiry file path is companion to token path", func(t *testing.T) {
+		assert.Equal(t, "/tmp/.github-token.expiry", GitHubTokenExpiryPath("/tmp/.github-token"))
+	})
+}
+
+func TestIsGitHubTokenExpired(t *testing.T) {
+	tmpDir := t.TempDir()
+	tokenPath := tmpDir + "/github-token"
+
+	t.Run("returns true when no expiry file exists", func(t *testing.T) {
+		assert.True(t, IsGitHubTokenExpired(tokenPath))
+	})
+
+	t.Run("returns true when token is expired", func(t *testing.T) {
+		expiry := time.Now().Add(-1 * time.Hour) // expired 1 hour ago
+		err := WriteGitHubTokenExpiry(tokenPath, expiry)
+		require.NoError(t, err)
+		assert.True(t, IsGitHubTokenExpired(tokenPath))
+	})
+
+	t.Run("returns false when token is still valid", func(t *testing.T) {
+		expiry := time.Now().Add(1 * time.Hour) // valid for 1 more hour
+		err := WriteGitHubTokenExpiry(tokenPath, expiry)
+		require.NoError(t, err)
+		assert.False(t, IsGitHubTokenExpired(tokenPath))
+	})
+}
+
+func TestStartGitHubTokenRefresh_WritesExpiryFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	tokenPath := tmpDir + "/github-token"
+
+	futureExpiry := time.Now().Add(1 * time.Hour).UTC()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"token":"ghs_refreshed","expires_at":"` + futureExpiry.Format(time.RFC3339) + `"}`))
+	}))
+	defer server.Close()
+
+	client := NewClientWithConfig(server.URL, "hub-token", "agent-123")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	done := client.StartGitHubTokenRefresh(ctx, &GitHubTokenRefreshConfig{
+		RefreshAt: time.Now(),
+		TokenPath: tokenPath,
+	})
+
+	<-done
+
+	// Verify both token and expiry files were written
+	fileToken := ReadGitHubTokenFile(tokenPath)
+	assert.Equal(t, "ghs_refreshed", fileToken)
+
+	gotExpiry, err := ReadGitHubTokenExpiry(tokenPath)
+	require.NoError(t, err)
+	// Allow 1 second tolerance for time formatting precision
+	assert.WithinDuration(t, futureExpiry, gotExpiry, 1*time.Second)
+
+	// Token should not be considered expired
+	assert.False(t, IsGitHubTokenExpired(tokenPath))
+}
+
 func TestClient_StartHeartbeat_DefaultConfig(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

@@ -474,19 +474,46 @@ func discoverSigningKey(ctx context.Context, projectID string) (value, resourceN
 		return "", "", fmt.Errorf("no secret with labels scion-name=user_signing_key, scion-hub-hostname=%s found in project %s", hostnameLabel, projectID)
 	}
 
-	// Pick the best candidate: prefer scion-type=internal (current hub convention)
-	// over any other type (e.g. environment from legacy code).
+	// Pick the best candidate using a scoring heuristic. The hub's current
+	// convention uses scion-type=internal and scion-scope-id=<hub-instance-id>
+	// (not the legacy literal "hub"). When stale secrets survive from prior
+	// migrations, this ranking avoids picking the wrong one.
 	chosen := candidates[0]
 	if len(candidates) > 1 {
 		slog.Warn("multiple signing key secrets found, selecting best match",
 			"count", len(candidates),
 		)
+
+		bestScore := -1
 		for _, c := range candidates {
 			slog.Debug("signing key candidate",
 				"name", c.Name,
 				"labels", c.Labels,
 			)
+			score := 0
+			// Prefer scion-type=internal (current hub convention) over
+			// environment (legacy) or empty.
 			if c.Labels["scion-type"] == "internal" {
+				score += 10
+			}
+			// Prefer a real hub-instance scope-id over the legacy literal "hub".
+			// The hub now scopes keys to its actual instance ID.
+			scopeID := c.Labels["scion-scope-id"]
+			if scopeID != "" && scopeID != "hub" {
+				score += 5
+			}
+			// Deprioritise scion-type=environment (known legacy default).
+			if c.Labels["scion-type"] == "environment" {
+				score -= 2
+			}
+			slog.Debug("signing key candidate score",
+				"name", c.Name,
+				"score", score,
+				"scope_id", scopeID,
+				"type", c.Labels["scion-type"],
+			)
+			if score > bestScore {
+				bestScore = score
 				chosen = c
 			}
 		}

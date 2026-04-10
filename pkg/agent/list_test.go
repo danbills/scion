@@ -391,3 +391,151 @@ func TestListReconcilesPhaseWithContainerStatus(t *testing.T) {
 		})
 	}
 }
+
+func TestListPreservesRuntimeTerminalStateForKubernetes(t *testing.T) {
+	tests := []struct {
+		name            string
+		runtimePhase    string
+		containerStatus string
+		wantPhase       string
+	}{
+		{
+			name:            "legacy ended maps completed pod to stopped",
+			runtimePhase:    runtime.LegacyAgentPhaseEnded,
+			containerStatus: "Succeeded (Completed)",
+			wantPhase:       string(state.PhaseStopped),
+		},
+		{
+			name:            "legacy ended maps failed pod to error",
+			runtimePhase:    runtime.LegacyAgentPhaseEnded,
+			containerStatus: "Failed (Error)",
+			wantPhase:       string(state.PhaseError),
+		},
+		{
+			name:            "structured stopped phase wins over stale info",
+			runtimePhase:    string(state.PhaseStopped),
+			containerStatus: "Succeeded (Completed)",
+			wantPhase:       string(state.PhaseStopped),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			grovePath := filepath.Join(tmpDir, ".scion")
+			agentName := "k8s-agent"
+			agentHome := filepath.Join(grovePath, "agents", agentName, "home")
+			if err := os.MkdirAll(agentHome, 0755); err != nil {
+				t.Fatal(err)
+			}
+
+			info := api.AgentInfo{
+				Name:     agentName,
+				Phase:    string(state.PhaseRunning),
+				Activity: string(state.ActivityThinking),
+				Runtime:  "kubernetes",
+			}
+			infoData, _ := json.MarshalIndent(info, "", "  ")
+			infoPath := filepath.Join(agentHome, "agent-info.json")
+			if err := os.WriteFile(infoPath, infoData, 0644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(grovePath, "agents", agentName, "scion-agent.json"), []byte("{}"), 0644); err != nil {
+				t.Fatal(err)
+			}
+
+			mock := &runtime.MockRuntime{
+				ListFunc: func(_ context.Context, _ map[string]string) ([]api.AgentInfo, error) {
+					return []api.AgentInfo{
+						{
+							Name:            agentName,
+							GrovePath:       grovePath,
+							Runtime:         "kubernetes",
+							Phase:           tc.runtimePhase,
+							ContainerStatus: tc.containerStatus,
+						},
+					}, nil
+				},
+			}
+
+			mgr := NewManager(mock)
+			agents, err := mgr.List(context.Background(), nil)
+			if err != nil {
+				t.Fatalf("List() error: %v", err)
+			}
+
+			if len(agents) != 1 {
+				t.Fatalf("expected 1 agent, got %d", len(agents))
+			}
+			if agents[0].Phase != tc.wantPhase {
+				t.Errorf("Phase = %q, want %q", agents[0].Phase, tc.wantPhase)
+			}
+			if agents[0].Activity != "" {
+				t.Errorf("Activity = %q, want empty", agents[0].Activity)
+			}
+
+			updatedData, err := os.ReadFile(infoPath)
+			if err != nil {
+				t.Fatalf("failed to read updated agent-info.json: %v", err)
+			}
+			var updated api.AgentInfo
+			if err := json.Unmarshal(updatedData, &updated); err != nil {
+				t.Fatalf("failed to decode updated agent-info.json: %v", err)
+			}
+			if updated.Phase != tc.wantPhase {
+				t.Errorf("persisted Phase = %q, want %q", updated.Phase, tc.wantPhase)
+			}
+			if updated.Activity != "" {
+				t.Errorf("persisted Activity = %q, want empty", updated.Activity)
+			}
+		})
+	}
+}
+
+func TestPersistAgentInfoState_AtomicallyRewritesAndPreservesMode(t *testing.T) {
+	tmpDir := t.TempDir()
+	infoPath := filepath.Join(tmpDir, "agent-info.json")
+
+	info := api.AgentInfo{
+		Name:     "agent",
+		Phase:    string(state.PhaseRunning),
+		Activity: string(state.ActivityThinking),
+	}
+	data, err := json.MarshalIndent(info, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(infoPath, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := persistAgentInfoState(infoPath, string(state.PhaseStopped), ""); err != nil {
+		t.Fatalf("persistAgentInfoState() error = %v", err)
+	}
+
+	updatedData, err := os.ReadFile(infoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var updated api.AgentInfo
+	if err := json.Unmarshal(updatedData, &updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated.Phase != string(state.PhaseStopped) {
+		t.Fatalf("Phase = %q, want %q", updated.Phase, state.PhaseStopped)
+	}
+	if updated.Activity != "" {
+		t.Fatalf("Activity = %q, want empty", updated.Activity)
+	}
+
+	fi, err := os.Stat(infoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0600 {
+		t.Fatalf("mode = %o, want %o", fi.Mode().Perm(), os.FileMode(0600))
+	}
+	if _, err := os.Stat(infoPath + ".tmp"); !os.IsNotExist(err) {
+		t.Fatalf("temp file should not remain, stat err = %v", err)
+	}
+}

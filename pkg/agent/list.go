@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,7 +26,10 @@ import (
 	"github.com/GoogleCloudPlatform/scion/pkg/agent/state"
 	"github.com/GoogleCloudPlatform/scion/pkg/api"
 	"github.com/GoogleCloudPlatform/scion/pkg/config"
+	scionruntime "github.com/GoogleCloudPlatform/scion/pkg/runtime"
 )
+
+const legacyFailedContainerStatusPrefix = "failed"
 
 func (m *AgentManager) List(ctx context.Context, filter map[string]string) ([]api.AgentInfo, error) {
 	agents, err := m.Runtime.List(ctx, filter)
@@ -73,13 +77,16 @@ func (m *AgentManager) List(ctx context.Context, filter map[string]string) ([]ap
 			scionJSON := filepath.Join(agentDir, "scion-agent.json")
 			agentHome := config.GetAgentHomePath(agents[i].GrovePath, agents[i].Name)
 			agentInfoJSON := filepath.Join(agentHome, "agent-info.json")
+			terminalPhase := terminalRuntimePhase(agents[i])
 
 			// Try agent-info.json first for latest status from container
 			if data, err := os.ReadFile(agentInfoJSON); err == nil {
 				var info api.AgentInfo
 				if err := json.Unmarshal(data, &info); err == nil {
-					agents[i].Phase = info.Phase
-					agents[i].Activity = info.Activity
+					if terminalPhase == "" {
+						agents[i].Phase = info.Phase
+						agents[i].Activity = info.Activity
+					}
 					if agents[i].Runtime == "" {
 						agents[i].Runtime = info.Runtime
 					}
@@ -93,6 +100,17 @@ func (m *AgentManager) List(ctx context.Context, filter map[string]string) ([]ap
 					if info.Detail != nil {
 						agents[i].Detail = info.Detail
 					}
+				}
+			}
+
+			if terminalPhase != "" {
+				agents[i].Phase = terminalPhase
+				agents[i].Activity = ""
+				// Terminal pod phases mean the harness should already be exiting,
+				// so this is a best-effort convergence write rather than a
+				// continuously contended state update.
+				if err := persistAgentInfoState(agentInfoJSON, terminalPhase, ""); err != nil {
+					slog.Debug("failed to persist terminal agent state", "path", agentInfoJSON, "err", err)
 				}
 			}
 
@@ -238,4 +256,56 @@ func (m *AgentManager) List(ctx context.Context, filter map[string]string) ([]ap
 	}
 
 	return agents, nil
+}
+
+func terminalRuntimePhase(agent api.AgentInfo) string {
+	switch state.Phase(agent.Phase) {
+	case state.PhaseStopped, state.PhaseError:
+		return agent.Phase
+	case state.PhaseCreated, state.PhaseProvisioning, state.PhaseCloning,
+		state.PhaseStarting, state.PhaseRunning, state.PhaseStopping:
+		return ""
+	}
+	if agent.Phase != scionruntime.LegacyAgentPhaseEnded {
+		return ""
+	}
+	containerStatus := strings.ToLower(agent.ContainerStatus)
+	if strings.Contains(containerStatus, legacyFailedContainerStatusPrefix) {
+		return string(state.PhaseError)
+	}
+	return string(state.PhaseStopped)
+}
+
+func persistAgentInfoState(path, phase, activity string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+
+	var info api.AgentInfo
+	if err := json.Unmarshal(data, &info); err != nil {
+		return err
+	}
+
+	if info.Phase == phase && info.Activity == activity {
+		return nil
+	}
+
+	info.Phase = phase
+	info.Activity = activity
+
+	updated, err := json.MarshalIndent(info, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, updated, fi.Mode()); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }

@@ -17,8 +17,10 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
 	"sort"
@@ -32,6 +34,27 @@ import (
 	"github.com/GoogleCloudPlatform/scion/pkg/runtime"
 	"github.com/GoogleCloudPlatform/scion/pkg/util"
 )
+
+var ErrTmuxBinaryNotFound = errors.New("tmux binary not found")
+
+func classifyLaunchRuntimeError(err error, resolvedImage string) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, exec.ErrNotFound) || isTmuxShellNotFoundError(err) {
+		return fmt.Errorf("failed to launch container in image %q: %w: %w", resolvedImage, ErrTmuxBinaryNotFound, err)
+	}
+	return fmt.Errorf("failed to launch container: %w", err)
+}
+
+func isTmuxShellNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "tmux: command not found") ||
+		strings.Contains(msg, "tmux: not found")
+}
 
 func (m *AgentManager) Start(ctx context.Context, opts api.StartOptions) (*api.AgentInfo, error) {
 	// Resolve grove name early so we can scope the container lookup below.
@@ -135,7 +158,9 @@ func (m *AgentManager) Start(ctx context.Context, opts api.StartOptions) (*api.A
 		task = promptFileContent
 	} else if task != "" {
 		// Explicit prompt always wins — write/overwrite prompt.md
-		_ = os.WriteFile(promptFile, []byte(task), 0644)
+		if writeErr := os.WriteFile(promptFile, []byte(task), 0644); writeErr != nil {
+			return nil, fmt.Errorf("failed to write prompt file %s: %w", promptFile, writeErr)
+		}
 	}
 
 	// Load settings for registry resolution
@@ -571,7 +596,10 @@ func (m *AgentManager) Start(ctx context.Context, opts api.StartOptions) (*api.A
 		finalScionCfg.AuthSelectedType = opts.HarnessAuth
 		cfgData, marshalErr := json.MarshalIndent(finalScionCfg, "", "  ")
 		if marshalErr == nil {
-			_ = os.WriteFile(filepath.Join(agentDir, "scion-agent.json"), cfgData, 0644)
+			configPath := filepath.Join(agentDir, "scion-agent.json")
+			if writeErr := os.WriteFile(configPath, cfgData, 0644); writeErr != nil {
+				return nil, fmt.Errorf("failed to write agent config %s: %w", configPath, writeErr)
+			}
 		}
 	}
 
@@ -786,20 +814,23 @@ func (m *AgentManager) Start(ctx context.Context, opts api.StartOptions) (*api.A
 	}
 	id, err := m.Runtime.Run(ctx, runCfg)
 	if err != nil {
-		if strings.Contains(err.Error(), "executable file not found") ||
-			strings.Contains(err.Error(), "tmux: command not found") ||
-			strings.Contains(err.Error(), "tmux: not found") {
-			return nil, fmt.Errorf("failed to launch container: tmux binary not found in image '%s'. "+
-				"Ensure the image has tmux installed. Error: %w", resolvedImage, err)
+		// Provisioning writes agent-info.json in "created" state before the
+		// runtime launch. If the launch itself fails, keep the provisioned
+		// workspace but flip the local state to "error" so list/status do not
+		// report a phantom created agent forever.
+		if updateErr := UpdateAgentConfig(opts.Name, opts.GrovePath, "error", m.Runtime.Name(), profileName); updateErr != nil {
+			util.Debugf("Start: failed to mark agent error in local config: %v", updateErr)
 		}
-		return nil, fmt.Errorf("failed to launch container: %w", err)
+		return nil, classifyLaunchRuntimeError(err, resolvedImage)
 	}
 
 	status := "running"
 	if opts.Resume {
 		status = "resumed"
 	}
-	_ = UpdateAgentConfig(opts.Name, opts.GrovePath, status, m.Runtime.Name(), profileName)
+	if updateErr := UpdateAgentConfig(opts.Name, opts.GrovePath, status, m.Runtime.Name(), profileName); updateErr != nil {
+		util.Debugf("Start: failed to update local agent status to %q: %v", status, updateErr)
+	}
 
 	// Fetch fresh info and verify the container is actually running
 	allAgents, err := m.Runtime.List(ctx, map[string]string{"scion.name": slug})

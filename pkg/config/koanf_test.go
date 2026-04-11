@@ -688,3 +688,98 @@ hub:
 	assert.Equal(t, "project-grove-id", s.GroveID,
 		"grove_id should come from project hub.grove_id, not global top-level grove_id")
 }
+
+func TestLoadSettingsKoanf_V1HubGroveIDPopulatesGetHubGroveID(t *testing.T) {
+	// Verifies that hub.grove_id (snake_case, V1 format) is remapped to
+	// hub.groveId (camelCase) so that GetHubGroveID() returns the correct
+	// value. Without this remapping, EnsureHubReady falls back to the local
+	// grove_id and loops on grove registration when the IDs differ.
+	tmpDir := t.TempDir()
+
+	originalHome := os.Getenv("HOME")
+	defer os.Setenv("HOME", originalHome)
+	os.Setenv("HOME", tmpDir)
+
+	for _, env := range []string{"SCION_HUB_ENDPOINT", "SCION_HUB_GROVE_ID"} {
+		if orig, ok := os.LookupEnv(env); ok {
+			os.Unsetenv(env)
+			t.Cleanup(func() { os.Setenv(env, orig) })
+		}
+	}
+
+	// Create global dir to satisfy LoadSettingsKoanf
+	globalScionDir := filepath.Join(tmpDir, ".scion")
+	require.NoError(t, os.MkdirAll(globalScionDir, 0755))
+
+	groveDir := filepath.Join(tmpDir, "my-project", ".scion")
+	require.NoError(t, os.MkdirAll(groveDir, 0755))
+
+	// V1 format settings with hub.grove_id set (the hub grove ID)
+	groveSettings := `schema_version: "1"
+hub:
+  enabled: true
+  endpoint: "https://hub.example.com"
+  grove_id: "hub-grove-uuid-972dd7f5"
+`
+	require.NoError(t, os.WriteFile(filepath.Join(groveDir, "settings.yaml"), []byte(groveSettings), 0644))
+
+	s, err := LoadSettingsKoanf(groveDir)
+	require.NoError(t, err)
+
+	// GetHubGroveID() must return the hub grove ID from V1's hub.grove_id
+	assert.Equal(t, "hub-grove-uuid-972dd7f5", s.GetHubGroveID(),
+		"GetHubGroveID() should return the value from V1 hub.grove_id")
+}
+
+func TestLoadSettingsKoanf_V1HubGroveIDWithMarkerFile(t *testing.T) {
+	// When a git grove has both a grove-id marker file (local deterministic ID)
+	// and hub.grove_id in V1 settings (hub grove ID), the two must be distinct:
+	// - settings.GroveID should be the local ID (from the marker file)
+	// - settings.GetHubGroveID() should be the hub ID (from hub.grove_id)
+	tmpDir := t.TempDir()
+
+	originalHome := os.Getenv("HOME")
+	defer os.Setenv("HOME", originalHome)
+	os.Setenv("HOME", tmpDir)
+
+	for _, env := range []string{"SCION_HUB_ENDPOINT", "SCION_HUB_GROVE_ID"} {
+		if orig, ok := os.LookupEnv(env); ok {
+			os.Unsetenv(env)
+			t.Cleanup(func() { os.Setenv(env, orig) })
+		}
+	}
+
+	// Create global dir
+	globalScionDir := filepath.Join(tmpDir, ".scion")
+	require.NoError(t, os.MkdirAll(globalScionDir, 0755))
+
+	groveScionDir := filepath.Join(tmpDir, "my-project", ".scion")
+	require.NoError(t, os.MkdirAll(groveScionDir, 0755))
+
+	// Write grove-id marker file with local deterministic ID
+	require.NoError(t, WriteGroveID(groveScionDir, "local-deterministic-id"))
+
+	// For git groves, settings are stored in the external config dir.
+	// Write V1 settings with hub.grove_id pointing to a different hub grove.
+	groveConfigDir, err := GetGitGroveExternalConfigDir(groveScionDir)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(groveConfigDir, 0755))
+	groveSettings := `schema_version: "1"
+hub:
+  enabled: true
+  endpoint: "https://hub.example.com"
+  grove_id: "hub-grove-uuid-different"
+`
+	require.NoError(t, os.WriteFile(filepath.Join(groveConfigDir, "settings.yaml"), []byte(groveSettings), 0644))
+
+	s, err := LoadSettingsKoanf(groveScionDir)
+	require.NoError(t, err)
+
+	// GroveID should come from the marker file (local deterministic ID)
+	assert.Equal(t, "local-deterministic-id", s.GroveID,
+		"GroveID should come from grove-id marker file")
+
+	// GetHubGroveID() should return the hub grove ID from V1 settings
+	assert.Equal(t, "hub-grove-uuid-different", s.GetHubGroveID(),
+		"GetHubGroveID() should return the hub grove ID, distinct from local grove_id")
+}

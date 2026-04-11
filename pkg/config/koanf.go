@@ -112,6 +112,16 @@ func LoadSettingsKoanf(grovePath string) (*Settings, error) {
 		_ = k.Load(confmap.Provider(map[string]interface{}{
 			"grove_id": k.String("hub.grove_id"),
 		}, "."), nil)
+		// Also remap to hub.groveId (camelCase) so the legacy
+		// HubClientConfig.GroveID field (koanf tag "groveId") is populated.
+		// Without this, GetHubGroveID() returns "" for V1 settings, causing
+		// EnsureHubReady to fall back to the local grove_id and loop on
+		// grove registration when the hub grove ID differs from the local ID.
+		if !k.Exists("hub.groveId") {
+			_ = k.Load(confmap.Provider(map[string]interface{}{
+				"hub.groveId": k.String("hub.grove_id"),
+			}, "."), nil)
+		}
 	}
 
 	// For git groves, the grove_id is stored in a grove-id file inside the

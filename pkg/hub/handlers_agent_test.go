@@ -750,14 +750,23 @@ func TestDeleteGroveAgent_BrokerOffline(t *testing.T) {
 // createAgentDispatcher is a mock dispatcher for createAgent handler tests.
 // It allows controlling the status that DispatchAgentCreate reports back.
 type createAgentDispatcher struct {
-	createPhase  string // status to set on agent during DispatchAgentCreate
-	deleteCalled bool
-	deleteErr    error
+	createPhase   string // status to set on agent during DispatchAgentCreate
+	createRuntime string
+	createStatus  string
+	envReqs       *RemoteEnvRequirementsResponse
+	deleteCalled  bool
+	deleteErr     error
 }
 
 func (d *createAgentDispatcher) DispatchAgentCreate(_ context.Context, agent *store.Agent) error {
 	if d.createPhase != "" {
 		agent.Phase = d.createPhase
+	}
+	if d.createRuntime != "" {
+		agent.Runtime = d.createRuntime
+	}
+	if d.createStatus != "" {
+		agent.ContainerStatus = d.createStatus
 	}
 	return nil
 }
@@ -785,7 +794,10 @@ func (d *createAgentDispatcher) DispatchCheckAgentPrompt(_ context.Context, _ *s
 	return false, nil
 }
 func (d *createAgentDispatcher) DispatchAgentCreateWithGather(_ context.Context, agent *store.Agent) (*RemoteEnvRequirementsResponse, error) {
-	return nil, d.DispatchAgentCreate(context.Background(), agent)
+	if err := d.DispatchAgentCreate(context.Background(), agent); err != nil {
+		return nil, err
+	}
+	return d.envReqs, nil
 }
 
 // failingCreateDispatcher is a mock dispatcher whose DispatchAgentCreateWithGather
@@ -899,6 +911,105 @@ func TestCreateAgent_FallbackToProvisioningWhenNoBrokerStatus(t *testing.T) {
 	// When broker doesn't report a status, should fall back to "provisioning"
 	assert.Equal(t, string(state.PhaseProvisioning), resp.Agent.Phase,
 		"agent status should fall back to provisioning when broker doesn't report status")
+}
+
+type conflictOnceStore struct {
+	store.Store
+	failNextUpdate bool
+}
+
+func (s *conflictOnceStore) UpdateAgent(ctx context.Context, agent *store.Agent) error {
+	if s.failNextUpdate {
+		s.failNextUpdate = false
+		return store.ErrVersionConflict
+	}
+	return s.Store.UpdateAgent(ctx, agent)
+}
+
+func TestCreateAgent_RetriesVersionConflictAfterDispatch(t *testing.T) {
+	disp := &createAgentDispatcher{
+		createPhase:   string(state.PhaseRunning),
+		createRuntime: "kubernetes",
+		createStatus:  "Running",
+	}
+	srv, baseStore, grove := setupCreateAgentServer(t, disp)
+	wrapped := &conflictOnceStore{Store: baseStore, failNextUpdate: true}
+	srv.store = wrapped
+	ctx := context.Background()
+
+	rec := doRequest(t, srv, http.MethodPost, "/api/v1/agents", CreateAgentRequest{
+		Name:    "version-conflict-agent",
+		GroveID: grove.ID,
+		Task:    "do something",
+	})
+
+	require.Equal(t, http.StatusCreated, rec.Code)
+
+	var resp CreateAgentResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Agent)
+	require.Empty(t, resp.Warnings)
+
+	persisted, err := wrapped.GetAgent(ctx, resp.Agent.ID)
+	require.NoError(t, err)
+	assert.False(t, wrapped.failNextUpdate, "test should exercise the conflict retry path")
+	assert.Equal(t, "kubernetes", persisted.Runtime)
+	assert.Equal(t, "Running", persisted.ContainerStatus)
+	assert.Equal(t, string(state.PhaseRunning), persisted.Phase)
+}
+
+func TestCreateAgent_EnvGatherRetriesVersionConflict(t *testing.T) {
+	disp := &createAgentDispatcher{
+		envReqs: &RemoteEnvRequirementsResponse{
+			Required: []string{"API_TOKEN"},
+			Needs:    []string{"API_TOKEN"},
+		},
+	}
+	srv, baseStore, grove := setupCreateAgentServer(t, disp)
+	wrapped := &conflictOnceStore{Store: baseStore, failNextUpdate: true}
+	srv.store = wrapped
+	ctx := context.Background()
+
+	rec := doRequest(t, srv, http.MethodPost, "/api/v1/agents", CreateAgentRequest{
+		Name:      "env-gather-conflict-agent",
+		GroveID:   grove.ID,
+		Task:      "do something",
+		GatherEnv: true,
+	})
+
+	require.Equal(t, http.StatusAccepted, rec.Code)
+
+	var resp CreateAgentResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Agent)
+	require.NotNil(t, resp.EnvGather)
+
+	persisted, err := wrapped.GetAgent(ctx, resp.Agent.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(state.PhaseProvisioning), persisted.Phase)
+	assert.False(t, wrapped.failNextUpdate, "test should exercise the conflict retry path")
+}
+
+func TestCreateAgent_ProvisionOnlyRetriesVersionConflict(t *testing.T) {
+	disp := &createAgentDispatcher{createPhase: string(state.PhaseRunning)}
+	srv, baseStore, grove := setupCreateAgentServer(t, disp)
+	wrapped := &conflictOnceStore{Store: baseStore, failNextUpdate: true}
+	srv.store = wrapped
+
+	rec := doRequest(t, srv, http.MethodPost, "/api/v1/agents", CreateAgentRequest{
+		Name:          "provision-only-conflict-agent",
+		GroveID:       grove.ID,
+		Task:          "some task",
+		ProvisionOnly: true,
+	})
+
+	require.Equal(t, http.StatusCreated, rec.Code)
+
+	var resp CreateAgentResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Agent)
+	assert.Empty(t, resp.Warnings)
+	assert.False(t, wrapped.failNextUpdate, "test should exercise the conflict retry path")
 }
 
 func TestCreateAgent_StartsWithoutTask(t *testing.T) {

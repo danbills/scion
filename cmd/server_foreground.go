@@ -656,6 +656,16 @@ func resolveHubEndpoint(cfg *config.GlobalConfig, brokerSettings *config.Setting
 		return hubEndpoint
 	}
 
+	// Check settings (e.g. SCION_HUB_ENDPOINT env var) before falling back
+	// to localhost. On combo servers the settings-level endpoint is typically
+	// the public URL and should be used for agent dispatch.
+	if hubEndpoint := brokerSettings.GetHubEndpoint(); hubEndpoint != "" {
+		if enableDebug {
+			log.Printf("Hub endpoint resolved from settings (SCION_HUB_ENDPOINT): %s", hubEndpoint)
+		}
+		return hubEndpoint
+	}
+
 	port := cfg.Hub.Port
 	if enableWeb {
 		port = webPort

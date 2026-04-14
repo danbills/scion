@@ -17,6 +17,7 @@ package cmd
 import (
 	"testing"
 
+	"github.com/GoogleCloudPlatform/scion/pkg/config"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -95,6 +96,79 @@ func TestContainerBridgeEndpoint(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestResolveHubEndpointSettingsFallback(t *testing.T) {
+	// Save and restore global state
+	origEnableHub := enableHub
+	origEnableDebug := enableDebug
+	origWebBaseURL := webBaseURL
+	origEnableWeb := enableWeb
+	origWebPort := webPort
+	defer func() {
+		enableHub = origEnableHub
+		enableDebug = origEnableDebug
+		webBaseURL = origWebBaseURL
+		enableWeb = origEnableWeb
+		webPort = origWebPort
+	}()
+
+	t.Run("settings endpoint used when hub enabled and no server config", func(t *testing.T) {
+		enableHub = true
+		enableDebug = false
+		webBaseURL = ""
+		enableWeb = true
+		webPort = 8080
+		t.Setenv("SCION_SERVER_BASE_URL", "")
+
+		cfg := &config.GlobalConfig{}
+		settings := &config.Settings{
+			Hub: &config.HubClientConfig{
+				Endpoint: "https://hub.demo.scion-ai.dev",
+			},
+		}
+
+		got := resolveHubEndpoint(cfg, settings)
+		assert.Equal(t, "https://hub.demo.scion-ai.dev", got)
+	})
+
+	t.Run("server config takes priority over settings", func(t *testing.T) {
+		enableHub = true
+		enableDebug = false
+		webBaseURL = ""
+		enableWeb = true
+		webPort = 8080
+		t.Setenv("SCION_SERVER_BASE_URL", "")
+
+		cfg := &config.GlobalConfig{
+			Hub: config.HubServerConfig{
+				Endpoint: "https://server-config.example.com",
+			},
+		}
+		settings := &config.Settings{
+			Hub: &config.HubClientConfig{
+				Endpoint: "https://settings.example.com",
+			},
+		}
+
+		got := resolveHubEndpoint(cfg, settings)
+		assert.Equal(t, "https://server-config.example.com", got)
+	})
+
+	t.Run("falls back to localhost when no settings", func(t *testing.T) {
+		enableHub = true
+		enableDebug = false
+		webBaseURL = ""
+		enableWeb = true
+		webPort = 8080
+		t.Setenv("SCION_SERVER_BASE_URL", "")
+
+		cfg := &config.GlobalConfig{}
+		settings := &config.Settings{}
+
+		got := resolveHubEndpoint(cfg, settings)
+		assert.Equal(t, "http://localhost:8080", got)
+	})
 }
 
 func TestIsLocalhostURL(t *testing.T) {

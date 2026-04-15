@@ -1,0 +1,3 @@
+[submodule "scion-athenaeum"]
+	path = scion-athenaeum
+	url = git@github.com:danbills/scion-athenaeum.git

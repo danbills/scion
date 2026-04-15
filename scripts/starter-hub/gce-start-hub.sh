@@ -284,16 +284,6 @@ if $FULL_DEPLOY; then
         fi
     fi
 
-    # Install polkit if missing (needed for scion user to restart its own service)
-    if ! dpkg -s polkitd &>/dev/null 2>&1; then
-        echo "  -> Installing polkit..."
-        if ! $NEED_APT_UPDATE; then
-            sudo apt-get update
-            NEED_APT_UPDATE=true
-        fi
-        sudo apt-get install -y polkitd
-    fi
-
     # Install Caddy if missing
     if ! command -v caddy &>/dev/null; then
         echo "  -> Installing Caddy..."
@@ -326,42 +316,32 @@ if $FULL_DEPLOY; then
         echo "  -> Systemd unit file unchanged"
     fi
 
-    # Install polkit rule to allow scion user to restart its own service
-    # (needed for the web-based "Rebuild Server from Git" maintenance task)
-    POLKIT_RULE="/etc/polkit-1/rules.d/50-scion-hub-restart.rules"
-    cat > /tmp/50-scion-hub-restart.rules <<POLKIT_EOF
-polkit.addRule(function(action, subject) {
-    if (action.id == "org.freedesktop.systemd1.manage-units" &&
-        action.lookup("unit") == "scion-hub.service" &&
-        subject.user == "scion") {
-        return polkit.Result.YES;
-    }
-});
-POLKIT_EOF
-    if ! diff -q /tmp/50-scion-hub-restart.rules "$POLKIT_RULE" >/dev/null 2>&1; then
-        sudo mkdir -p "$(dirname "$POLKIT_RULE")"
-        sudo mv /tmp/50-scion-hub-restart.rules "$POLKIT_RULE"
-        echo "  -> Polkit rule installed (scion user can restart scion-hub)"
+    # Install sudoers rules for the "Rebuild Server from Git" maintenance task.
+    # The scion service user needs elevated privileges for two operations:
+    #   1. Installing the rebuilt binary into /usr/local/bin/
+    #   2. Restarting the scion-hub systemd service
+    # Each rule is scoped to the exact command used by the executor.
+    SUDOERS_RULE="/etc/sudoers.d/scion-rebuild-server"
+    cat > /tmp/scion-rebuild-server <<SUDOERS_EOF
+# Scion rebuild-server maintenance task privileges.
+scion ALL=(root) NOPASSWD: /usr/bin/install -m 755 /home/scion/scion/scion.rebuild /usr/local/bin/scion
+scion ALL=(root) NOPASSWD: /usr/bin/systemctl restart scion-hub
+SUDOERS_EOF
+    if ! diff -q /tmp/scion-rebuild-server "$SUDOERS_RULE" >/dev/null 2>&1; then
+        sudo install -m 440 -o root -g root /tmp/scion-rebuild-server "$SUDOERS_RULE"
+        rm -f /tmp/scion-rebuild-server
+        echo "  -> Sudoers rules installed (scion user can install binary and restart service)"
     else
-        rm -f /tmp/50-scion-hub-restart.rules
-        echo "  -> Polkit rule unchanged"
+        rm -f /tmp/scion-rebuild-server
+        echo "  -> Sudoers rules unchanged"
     fi
 
-    # Install sudoers rule to allow scion user to install rebuilt binary
-    # (needed for the web-based "Rebuild Server from Git" maintenance task)
-    SUDOERS_RULE="/etc/sudoers.d/scion-install-binary"
-    cat > /tmp/scion-install-binary <<SUDOERS_EOF
-# Allow scion user to install rebuilt server binary without a password.
-# Scoped to the exact install command used by the rebuild-server maintenance task.
-scion ALL=(root) NOPASSWD: /usr/bin/install -m 755 /home/scion/scion/scion.rebuild /usr/local/bin/scion
-SUDOERS_EOF
-    if ! diff -q /tmp/scion-install-binary "$SUDOERS_RULE" >/dev/null 2>&1; then
-        sudo install -m 440 -o root -g root /tmp/scion-install-binary "$SUDOERS_RULE"
-        rm -f /tmp/scion-install-binary
-        echo "  -> Sudoers rule installed (scion user can install rebuilt binary)"
-    else
-        rm -f /tmp/scion-install-binary
-        echo "  -> Sudoers rule unchanged"
+    # Clean up legacy polkit rule if present (replaced by sudoers above).
+    # Polkit 0.105 (common on Ubuntu) doesn't support JavaScript rules, so the
+    # old .rules file was silently ignored.
+    if [ -f /etc/polkit-1/rules.d/50-scion-hub-restart.rules ]; then
+        sudo rm -f /etc/polkit-1/rules.d/50-scion-hub-restart.rules
+        echo "  -> Removed legacy polkit rule (now using sudoers)"
     fi
 
     # Fix certificate permissions for Caddy (only if certs exist)

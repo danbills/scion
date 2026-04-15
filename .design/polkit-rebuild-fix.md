@@ -1,7 +1,7 @@
 # Fix: Polkit Authorization for Rebuild Server Maintenance Task
 
 **Created:** 2026-04-13
-**Status:** Implemented
+**Status:** Superseded — polkit approach replaced by sudoers rules (polkit 0.105 on Ubuntu LTS does not support JavaScript `.rules` files). See `scripts/starter-hub/gce-start-hub.sh` for the current sudoers-based implementation.
 **Related:** `.design/server-routine-maintenance.md`, `pkg/hub/maintenance_executors.go`, `scripts/starter-hub/gce-start-hub.sh`
 
 ---

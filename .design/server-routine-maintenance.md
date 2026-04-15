@@ -322,11 +322,15 @@ Steps:
 
 **Safety:** The rebuild executor only runs on Linux (where systemd is available). Returns an error on other platforms with a message directing the operator to restart manually.
 
-**Privileges:** Two privilege grants are required, both installed by the deployment script (`gce-start-hub.sh`):
-- **Binary installation:** A sudoers rule at `/etc/sudoers.d/scion-install-binary` allows the `scion` user to run the specific `install` command for placing the rebuilt binary into `/usr/local/bin/`. The rule is narrowly scoped to the exact source and destination paths.
-- **Service restart:** A polkit rule at `/etc/polkit-1/rules.d/50-scion-hub-restart.rules` grants the `scion` user permission to manage the `scion-hub.service` unit without interactive authentication.
+**Privileges:** A sudoers drop-in at `/etc/sudoers.d/scion-rebuild-server` grants the `scion` user two narrowly-scoped commands without a password:
+- `install -m 755 /home/scion/scion/scion.rebuild /usr/local/bin/scion` — binary installation
+- `systemctl restart scion-hub` — service restart
+
+Both are installed by the deployment script (`gce-start-hub.sh`).
 
 **Why staging + sudo install:** The service user cannot write directly to `/usr/local/bin/`, and writing directly to the running binary would fail with `ETXTBSY` on Linux. Building to a staging path in the repo directory (owned by the service user) avoids both problems. The `install` command atomically creates a new file at the destination rather than overwriting in-place.
+
+**Why sudoers over polkit:** The Ubuntu LTS polkit version (0.105) uses the older `.pkla` format, not the JavaScript `.rules` files introduced in 0.106+. Sudoers provides consistent behavior across all Ubuntu versions and allows scoping to exact commands.
 
 **Graceful shutdown:** The hub process handles the restart by building the new binary, installing it, then signaling itself via systemd. The new process picks up the existing database and configuration.
 

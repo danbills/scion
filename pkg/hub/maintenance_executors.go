@@ -264,8 +264,9 @@ func (e *RebuildServerExecutor) Run(ctx context.Context, logger io.Writer, param
 	// destination (e.g., /usr/local/bin/scion). This avoids two problems:
 	//   1. ETXTBSY — writing directly to a running binary fails on Linux.
 	//   2. Permission denied — the service user typically cannot write to
-	//      /usr/local/bin/. A sudoers rule grants the narrow privilege to
-	//      install from this staging path to the binary destination.
+	//      /usr/local/bin/.
+	// Both the install and restart steps use sudo, backed by narrowly-scoped
+	// sudoers rules installed by the deploy script (gce-start-hub.sh).
 	stagingBinary := filepath.Join(repoPath, "scion.rebuild")
 
 	steps := []struct {
@@ -278,7 +279,7 @@ func (e *RebuildServerExecutor) Run(ctx context.Context, logger io.Writer, param
 		{"Building web assets", "make", []string{"web"}, repoPath},
 		{"Building server binary", "go", []string{"build", "-o", stagingBinary, "./cmd/scion"}, repoPath},
 		{"Installing server binary", "sudo", []string{"install", "-m", "755", stagingBinary, binaryDest}, ""},
-		{"Restarting service", "systemctl", []string{"restart", serviceName}, ""},
+		{"Restarting service", "sudo", []string{"systemctl", "restart", serviceName}, ""},
 	}
 
 	for i, step := range steps {

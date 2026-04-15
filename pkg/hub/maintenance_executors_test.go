@@ -76,7 +76,7 @@ func TestRebuildServerExecutor_BuildsToStagingThenInstalls(t *testing.T) {
 	binaryDest := filepath.Join(binDir, "scion")
 
 	// Create stub scripts that record their invocation to a shared log file.
-	for _, cmd := range []string{"git", "make", "go", "sudo", "systemctl"} {
+	for _, cmd := range []string{"git", "make", "go", "sudo"} {
 		script := fmt.Sprintf("#!/bin/sh\necho '%s' \"$@\" >> '%s'\n", cmd, logFile)
 		stubPath := filepath.Join(stubDir, cmd)
 		if err := os.WriteFile(stubPath, []byte(script), 0o755); err != nil {
@@ -120,12 +120,18 @@ func TestRebuildServerExecutor_BuildsToStagingThenInstalls(t *testing.T) {
 	}
 
 	// Verify sudo install moves the staging binary to the final destination.
-	sudoLine := lines[3]
-	if !strings.Contains(sudoLine, "sudo install") {
-		t.Errorf("expected sudo install command, got: %s", sudoLine)
+	sudoInstallLine := lines[3]
+	if !strings.Contains(sudoInstallLine, "sudo install") {
+		t.Errorf("expected sudo install command, got: %s", sudoInstallLine)
 	}
-	if !strings.Contains(sudoLine, stagingBinary) || !strings.Contains(sudoLine, binaryDest) {
-		t.Errorf("sudo install should reference staging %q and dest %q, got: %s", stagingBinary, binaryDest, sudoLine)
+	if !strings.Contains(sudoInstallLine, stagingBinary) || !strings.Contains(sudoInstallLine, binaryDest) {
+		t.Errorf("sudo install should reference staging %q and dest %q, got: %s", stagingBinary, binaryDest, sudoInstallLine)
+	}
+
+	// Verify restart uses sudo systemctl (not bare systemctl).
+	restartLine := lines[4]
+	if !strings.Contains(restartLine, "sudo systemctl restart test-scion") {
+		t.Errorf("expected 'sudo systemctl restart test-scion', got: %s", restartLine)
 	}
 }
 

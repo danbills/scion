@@ -16,8 +16,8 @@
 ARG BASE_IMAGE
 FROM ${BASE_IMAGE}
 
-RUN mkdir -p /home/scion/.local/share/opencode && \
-  chown -R scion:scion /home/scion/.local
+RUN mkdir -p /home/scion/.local/share/opencode /home/scion/.local/state/opencode /home/scion/.cache/opencode && \
+  chown -R scion:scion /home/scion/.local /home/scion/.cache
 
 # Install OpenCode
 # RUN curl -fsSL https://opencode.ai/install | bash

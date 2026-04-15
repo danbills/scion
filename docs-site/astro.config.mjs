@@ -65,6 +65,12 @@ export default defineConfig({
 					],
 				},
 				{
+					label: 'Patterns',
+					items: [
+						{ label: 'Athenaeum Coordination', slug: 'patterns/athenaeum-coordination' },
+					],
+				},
+				{
 					label: 'Hub User Guide',
 					items: [
 						{ label: 'Connecting to Hub', slug: 'hub-user/hosted-user' },

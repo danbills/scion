@@ -6,6 +6,8 @@ Every Scion agent has a dedicated **Workspace**, mounted at `/workspace` inside 
 
 Scion provides flexible options for how this workspace is backed on your host machine, ranging from isolated git worktrees to direct directory mounts.
 
+For multi-agent patterns that deliberately **share** one workspace across several agents (so they can hand off work to one another through the filesystem), see [Athenaeum Coordination](/scion/patterns/athenaeum-coordination/).
+
 ## Workspace Resolution
 
 When you start an agent, Scion determines its workspace based on the following precedence:

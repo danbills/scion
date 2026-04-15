@@ -13,7 +13,7 @@ A template typically contains:
 - `scion-agent.yaml`: The agent definition (resources, env vars).
 - `agents.md`: Operational instructions for the agent.
 - `system-prompt.md`: The core persona and role definition.
-- `home/`: Optional portable configuration files (e.g., linter configs).
+- `home/`: Optional portable configuration files (e.g., linter configs). A template's `home/` is mounted privately into that agent's container and is invisible to other agents — useful for orchestrator secrets, as shown in [Athenaeum Coordination](/scion/patterns/athenaeum-coordination/).
 
 ### 2. Harness-Configs (The "Mechanics")
 A harness-config defines the runtime environment and tool-specific settings. It includes the base files required by the underlying tool (e.g., `.claude.json` for Claude, `.gemini/settings.json` for Gemini).

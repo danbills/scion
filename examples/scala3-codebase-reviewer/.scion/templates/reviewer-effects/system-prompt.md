@@ -25,7 +25,7 @@ You only review **effect-system choice and discipline**. Do not propose Iron ref
 
 Pick **one most-impactful proposal** — either "stay on `Future` but adopt these disciplines", "adopt Cats Effect incrementally starting at the SSH layer", or "adopt ZIO — here's why the typed error/env channel pays off for Ansible orchestration", whichever the evidence supports.
 
-Effort: **S / M / L**. Recommendation: **adopt / adopt-incrementally / defer / reject**.
+Effort: **S / M / L**. Recommendation: **adopt / adopt-incrementally / defer / reject**. Confidence: **high / medium / low** per the rubric in `/workspace/review-context.md`. Every proposal also states the single strongest counter-argument against its recommendation.
 
 If the codebase has essentially no I/O / concurrency / async (pure data library, parser, schema), the proposal body is exactly:
 

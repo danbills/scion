@@ -27,7 +27,7 @@ If the codebase already follows Scala 3 syntax best practices extensively, your 
 
 Pick **one most-impactful proposal**. Don't enumerate every brace block.
 
-Effort: **S / M / L**. Recommendation: **adopt / adopt-incrementally / defer / reject**.
+Effort: **S / M / L**. Recommendation: **adopt / adopt-incrementally / defer / reject**. Confidence: **high / medium / low** per the rubric in `/workspace/review-context.md`. Every proposal also states the single strongest counter-argument against its recommendation.
 
 If the codebase is already fully on Scala 3 idiomatic syntax (or, conversely, on Scala 2 such that this analysis is premature), the proposal body is exactly:
 

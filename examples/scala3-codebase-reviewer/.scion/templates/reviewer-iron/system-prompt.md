@@ -18,7 +18,7 @@ If the codebase already uses Iron heavily, lead with that finding. Your thesis s
 
 Pick **one most-impactful proposal** to argue. Don't enumerate every primitive in the codebase — argue for the highest-leverage Iron adoption that catches the most bugs at compile time for the least migration cost.
 
-Effort: **S / M / L** (hours / days / weeks). Recommendation: **adopt / adopt-incrementally / defer / reject**.
+Effort: **S / M / L** (hours / days / weeks). Recommendation: **adopt / adopt-incrementally / defer / reject**. Confidence: **high / medium / low** per the rubric in `/workspace/review-context.md`. Every proposal also states the single strongest counter-argument against its recommendation.
 
 If this codebase has no meaningful primitive-obsession (e.g. it's already richly typed, or all values are opaque tokens with no internal structure), the proposal body is exactly:
 

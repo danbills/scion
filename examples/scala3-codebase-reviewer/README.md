@@ -69,7 +69,8 @@ bash examples/scala3-codebase-reviewer/scripts/review-codebase.sh \
 Requires `gh` authenticated against the target repo (the driver runs
 `gh auth status` and `gh repo view` as a precheck).
 
-Output lands under `examples/scala3-codebase-reviewer/.work/reviews/`.
+Output lands under `~/.scion/groves/scala3-codebase-reviewer/reviews/`
+(that directory is the shared `/workspace/` mount — see **How it works**).
 
 ## How this differs from the PR reviewer
 
@@ -103,15 +104,55 @@ This grove is **hub-native** (no git remote) — the same pattern
 `~/.scion/groves/scala3-codebase-reviewer/` directory on the broker as
 `/workspace/`, so they share state directly:
 
-1. Coordinator clones the target repo into `/workspace/code/` at startup.
-2. Coordinator writes `/workspace/review-context.md` and spawns the four
+1. The driver (`scripts/review-codebase.sh`) `gh repo clone`s the target
+   into `~/.scion/groves/scala3-codebase-reviewer/code/` **before**
+   launching the coordinator. Pre-cloning on the host keeps the
+   coordinator's job purely orchestrational.
+2. Coordinator starts, sees `/workspace/code/` already populated,
+   writes `/workspace/review-context.md`, and spawns the four
    specialists via `scion start`.
-3. Each specialist reviews `/workspace/code/` and writes its proposal to
-   `/workspace/reviews/<dim>/proposal.md`. `scion message --broadcast`
+3. Each specialist reviews `/workspace/code/` and writes its proposal
+   to `/workspace/reviews/<dim>/proposal.md`. `scion message --broadcast`
    carries notifications; the actual artifacts are files.
 4. Coordinator polls for the four proposals, spawns the synthesizer,
    which writes `/workspace/reviews/roadmap.md`.
 
-Running the demo requires: a scion server with hub enabled, this grove
-hub-linked as hub-native, and `gh` authenticated for the target repo
-clone. All agents are visible in the web UI at http://localhost:8080.
+All agents are visible in the web UI at http://localhost:8080.
+
+## Setup
+
+First time using this grove on a fresh clone:
+
+```bash
+# 1. scion server must be running with hub enabled.
+scion server start
+scion config set hub.endpoint http://localhost:8080
+scion hub enable
+
+# 2. Link the grove and sync templates to the hub.
+cd examples/scala3-codebase-reviewer
+scion hub link
+scion templates sync
+
+# 3. The gemma-local harness config must exist at
+#    ~/.scion/harness-configs/gemma-local/config.yaml, pointing at
+#    your llama.cpp endpoint. See scion-athenaeum for an example.
+#    To use claude instead, edit default_harness_config in each
+#    template's scion-agent.yaml.
+
+# 4. gh must be authenticated for the target repo.
+gh auth status
+```
+
+## Coordinator as Gemma: mode-switch caveat
+
+Gemma 4 26B can drive the coordinator, but it has a mode-switch failure
+at the synthesis phase — it will start *writing* the roadmap itself
+instead of dispatching the synthesizer. The coordinator template's
+system prompt is tuned against this (anti-narration + few-shot bash
+examples), but it's not bulletproof. See the
+[postmortem](../../docs-site/src/content/docs/patterns/scala3-codebase-reviewer-postmortem.md)
+for what went wrong and the prompt engineering that followed. The
+dispatch test harness lives at `scripts/test-gemma-dispatch.sh` with
+variants under `scripts/prompt-variants/`; run it with
+`bash scripts/test-gemma-dispatch.sh` to iterate on coordinator prompts.

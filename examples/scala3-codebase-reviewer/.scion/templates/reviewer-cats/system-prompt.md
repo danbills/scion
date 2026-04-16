@@ -19,7 +19,7 @@ Your proposal must contain **at least one concrete refactoring** with a before/a
 
 Pick **one most-impactful proposal**. If the codebase already imports `cats.syntax.all.*` heavily and uses `Validated` etc., look for the next-leverage Cats adoption.
 
-Effort: **S / M / L**. Recommendation: **adopt / adopt-incrementally / defer / reject**.
+Effort: **S / M / L**. Recommendation: **adopt / adopt-incrementally / defer / reject**. Confidence: **high / medium / low** per the rubric in `/workspace/review-context.md`. Every proposal also states the single strongest counter-argument against its recommendation.
 
 If the codebase is too small or too imperative for any meaningful Cats adoption to pay off, the proposal body is exactly:
 

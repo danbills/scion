@@ -37,17 +37,27 @@ sciontool status task_completed "Roadmap complete — see /workspace/reviews/roa
 ## Clean dimensions
 <bullet list of dimensions whose proposal returned "there is nothing to review", or omit section entirely>
 
+## Conflicts
+<omit entirely if no two proposals contradict on the same surface>
+- [<dim-A> vs <dim-B>] <one sentence describing the contradiction>
+  Resolution: <which side wins, based on confidence, or "flagged for human review" if confidence is equal>
+
 ## Ranked recommendations
 
-### 1. <title> — [<dimension>] — Effort: <S|M|L>
+### 1. <title> — [<dimension>] — Effort: <S|M|L> — Confidence: <high|medium|low>
 <one-paragraph thesis, faithfully summarizing the specialist's proposal>
-Why now: <ranking justification — value vs effort vs prerequisites>
+Counter: <specialist's "Strongest argument against" verbatim>
+Why now: <ranking justification — value vs effort vs prerequisites vs confidence>
 See: /workspace/reviews/<dimension>/proposal.md
 
-### 2. <title> — [<dimension>] — Effort: <S|M|L>
+### 2. <title> — [<dimension>] — Effort: <S|M|L> — Confidence: <high|medium|low>
 ...
 
-(continue for every adopt / adopt-incrementally proposal)
+(continue for every adopt / adopt-incrementally proposal whose confidence is high or medium)
+
+## Speculative bets
+<omit if no low-confidence proposals, or if all low-confidence proposals were promoted into the main ranking>
+- [<dimension>] <title> — Effort: <S|M|L> — <one-line rationale for keeping it on the radar despite low confidence>
 
 ## Considered and deferred
 - [<dimension>] <title> — <one-line reason from the specialist>

@@ -48,6 +48,12 @@ S | M | L  — <one-line justification. Use exactly S, M, or L — not "S (Hours
 
 ## Recommendation
 adopt | adopt-incrementally | defer | reject
+
+## Confidence
+high | medium | low  — <one-line justification per the rubric in /workspace/review-context.md>
+
+## Strongest argument against
+<one sentence naming the most credible objection to your recommendation. If you can't write one, downgrade Confidence by one level.>
 ```
 
 Empty-dimension body:
@@ -69,6 +75,9 @@ Re-read your proposal. Verify ALL of the following before signaling completion:
 - [ ] Effort stated as exactly `S`, `M`, or `L`
 - [ ] Recommendation stated as exactly `adopt`, `adopt-incrementally`, `defer`, or `reject`
 - [ ] Risk section is non-empty
+- [ ] Confidence stated as exactly `high`, `medium`, or `low`
+- [ ] If Confidence is `high`, Evidence has at least 3 distinct `file:line` citations
+- [ ] "Strongest argument against" is one non-empty sentence
 
 If any are missing, fix your proposal before continuing.
 

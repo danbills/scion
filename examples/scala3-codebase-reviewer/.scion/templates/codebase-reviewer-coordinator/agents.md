@@ -46,6 +46,25 @@ S (hours) | M (days) | L (weeks)
 ## Recommendation taxonomy
 adopt | adopt-incrementally | defer | reject
 
+## Confidence taxonomy
+high | medium | low
+
+### Confidence rubric (shared — every specialist uses this scale)
+- high   — >=3 independent file:line citations, pattern recurs across modules,
+           standard ecosystem fix, reversible.
+- medium — evidence is real but thin or module-local; ROI depends on codebase
+           specifics; reasonable people could disagree.
+- low    — speculative, single-file evidence, or a judgment bet on design direction.
+
+A proposal may not claim `high` without at least 3 distinct file:line citations.
+If the specialist cannot meet that bar, they must downgrade to `medium`.
+
+## Calibration requirement
+Every proposal must include a "Strongest argument against" section — one sentence
+naming the most credible objection to the recommendation. A specialist who cannot
+articulate a counter-argument has not thought hard enough and must downgrade
+confidence by one level.
+
 ## Empty-dimension rule
 If a dimension does not apply, proposal body is exactly:
     there is nothing to review

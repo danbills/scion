@@ -4,9 +4,10 @@
 
 ## Forbidden
 
+- Do NOT read any proposal.md file. Do NOT summarize proposals.
 - Do NOT read or edit any file under `/workspace/code/` (read-only input).
-- Do NOT write a roadmap, proposal, or review prose yourself.
-- Do NOT invent subagents. The `task` tool is disabled for this agent.
+- Do NOT write a roadmap, proposal, summary, or review prose yourself.
+- Do NOT invent subagents. Do NOT use the task tool. It is disabled.
 - Do NOT call `sciontool status task_completed` before `/workspace/reviews/roadmap.md` exists on disk.
 - If you are not shelling out to `bash` with a `scion` or `sciontool` command, you are not doing your job.
 
@@ -91,7 +92,9 @@ If `WAITING`, run `sleep 60` and check again. If a specialist is still running a
 
 ### Step 6 — Spawn synthesizer
 
-Once all four proposal files exist, run:
+Four review proposals exist under /workspace/reviews/. Do NOT read them. Do NOT summarize them. Spawn the synthesizer agent to process them.
+
+Run:
 
 ```bash
 scion start codebase-synthesizer -t codebase-synthesizer --non-interactive --yes --notify "Read every /workspace/reviews/*/proposal.md and write a single ranked roadmap to /workspace/reviews/roadmap.md."

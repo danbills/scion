@@ -70,6 +70,10 @@ $task"
   local scion_start_calls
   scion_start_calls=$(jq -r 'select(.type=="tool_use") | select(.part.tool=="bash") | .part.state.input.command // empty' "$output_file" 2>/dev/null | grep -c "scion start" || true)
 
+  # Synthesizer-specific detection
+  local synth_calls
+  synth_calls=$(jq -r 'select(.type=="tool_use") | select(.part.tool=="bash") | .part.state.input.command // empty' "$output_file" 2>/dev/null | grep -c "scion start codebase-synthesizer" || true)
+
   # Count any bash calls at all (even non-scion)
   local any_bash
   any_bash=$(jq -r 'select(.type=="tool_use") | select(.part.tool=="bash") | .part.state.input.command // empty' "$output_file" 2>/dev/null | head -5)
@@ -78,7 +82,34 @@ $task"
   local text_len
   text_len=$(jq -r 'select(.type=="text") | .part.text // empty' "$output_file" 2>/dev/null | wc -c || echo 0)
 
-  if [ "$scion_start_calls" -ge 1 ]; then
+  # Prose leak: did the model generate review/synthesis content?
+  local prose_leak
+  prose_leak=$(jq -r 'select(.type=="text") | .part.text // empty' "$output_file" 2>/dev/null | grep -ciE "roadmap|proposal|summary|recommendation|modernization" || true)
+
+  # Determine required pattern based on variant name
+  local requires_synth=false
+  [[ "$name" == *synth* ]] && requires_synth=true
+
+  if [ "$requires_synth" = true ]; then
+    if [ "$synth_calls" -ge 1 ]; then
+      echo "PASS  (${elapsed}s, ${synth_calls} synth calls, ${scion_start_calls} total scion-start, ${bash_calls} bash, ${text_len}c text, ${prose_leak} prose-leak)"
+      pass=$((pass + 1))
+    elif [ "$scion_start_calls" -ge 1 ]; then
+      echo "PARTIAL  (${elapsed}s, scion-start but no synthesizer dispatch, ${text_len}c text, ${prose_leak} prose-leak)"
+      echo "  bash commands: $(echo "$any_bash" | head -3 | tr '\n' ' ; ')"
+      fail=$((fail + 1))
+    elif [ "$bash_calls" -ge 1 ]; then
+      echo "PARTIAL  (${elapsed}s, bash called ${bash_calls}x but no scion-start, ${text_len}c text, ${prose_leak} prose-leak)"
+      echo "  bash commands: $(echo "$any_bash" | head -3 | tr '\n' ' ; ')"
+      fail=$((fail + 1))
+    else
+      echo "FAIL  (${elapsed}s, no bash calls, ${text_len}c text, ${prose_leak} prose-leak)"
+      local text_preview
+      text_preview=$(jq -r 'select(.type=="text") | .part.text // empty' "$output_file" 2>/dev/null | head -3 | tr '\n' ' ')
+      [ -n "$text_preview" ] && echo "  model said: ${text_preview:0:120}..."
+      fail=$((fail + 1))
+    fi
+  elif [ "$scion_start_calls" -ge 1 ]; then
     echo "PASS  (${elapsed}s, ${scion_start_calls} scion-start calls, ${bash_calls} total bash calls, ${text_len}c text)"
     pass=$((pass + 1))
   elif [ "$bash_calls" -ge 1 ]; then
@@ -87,7 +118,6 @@ $task"
     fail=$((fail + 1))
   else
     echo "FAIL  (${elapsed}s, no bash calls, ${text_len}c text)"
-    # Show what model actually said
     local text_preview
     text_preview=$(jq -r 'select(.type=="text") | .part.text // empty' "$output_file" 2>/dev/null | head -3 | tr '\n' ' ')
     [ -n "$text_preview" ] && echo "  model said: ${text_preview:0:120}..."

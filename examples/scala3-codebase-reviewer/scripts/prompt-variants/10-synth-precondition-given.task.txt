@@ -1,0 +1,11 @@
+The following proposal files already exist:
+- /workspace/reviews/iron/proposal.md
+- /workspace/reviews/syntax/proposal.md
+- /workspace/reviews/cats/proposal.md
+- /workspace/reviews/effects/proposal.md
+
+All four specialists are done. Your one remaining job is to run this command:
+
+scion start codebase-synthesizer -t codebase-synthesizer --non-interactive --yes --notify "Read every /workspace/reviews/*/proposal.md and write a single ranked roadmap to /workspace/reviews/roadmap.md."
+
+Execute it now.

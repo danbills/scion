@@ -1,7 +1,17 @@
 ---
 title: "Codebase Reviewer: Post-Run Analysis"
-description: Lessons learned, synthesizer output analysis, and prompt improvement recommendations from the first successful end-to-end run of the Scala 3 codebase reviewer demo.
+description: Lessons learned from two end-to-end runs of the Scala 3 codebase reviewer demo — Run 1 with Claude coordinator, Run 2 with Gemma 4 26B coordinator.
 ---
+
+Two runs against `danbills/ansible-scala` (172 Scala files). Run 1 used
+Claude/Sonnet as coordinator with Gemma specialists. Run 2 attempted
+all-Gemma (coordinator + specialists). Both produced roadmaps. Their
+different failure modes reveal where local LLMs can and cannot replace
+API models in multi-agent orchestration.
+
+---
+
+## Run 1: Claude coordinator + Gemma specialists
 
 First successful end-to-end run: **2026-04-15**, target repo
 `danbills/ansible-scala` (172 Scala files). Six agents produced a ranked
@@ -307,3 +317,178 @@ All four specialists produced substantive, accurate proposals (even if
 structurally incomplete). The model correctly explored build files,
 identified library usage patterns, and wrote coherent analyses. It fails
 only on multi-step procedural tasks requiring reliable tool invocation.
+
+---
+
+## Run 2: All-Gemma (Gemma coordinator + Gemma specialists)
+
+Second run: **2026-04-15 21:19 ET**, same target repo. Coordinator
+switched from Claude/Sonnet to Gemma 4 26B (`gemma-local` harness) with
+a rewritten system prompt emphasizing imperative bash-only dispatch.
+
+### Run 2 timeline
+
+| Event | Time (ET) | Delta |
+|---|---|---|
+| Coordinator started (gemma-local) | 21:19:36 | 0s |
+| 4 specialists spawned (gemma-local) | 21:19:58–21:20:14 | +22–38s |
+| All 4 proposals written | ~21:21:30 | ~+1m 54s |
+| Coordinator stalled at synthesis phase | 21:22:27 | +2m 51s |
+| Coordinator generated own roadmap (wrong path) | 21:22:27 | +2m 51s |
+
+**Configuration**: all agents on Gemma 4 26B via llama.cpp (`gemma-local`
+harness, 128k context). Same hub-native grove, shared `/workspace/`.
+Coordinator system prompt rewritten to imperative "terminal operator"
+framing per variant 07 test results.
+
+### What worked
+
+**Specialist dispatch was flawless.** The rewritten coordinator prompt
+("You are a dispatcher. You accomplish tasks EXCLUSIVELY by running shell
+commands via the bash tool.") succeeded where Run 1's original Gemma
+coordinator failed completely. All four `scion start` commands executed
+correctly via bash tool in ~38s. Error recovery worked — when the first
+`scion start` failed (no `--notify` in non-hub mode), Gemma retried
+with modified flags.
+
+**Specialist proposals were substantive.** 161 lines total across 4
+proposals (iron: 62, syntax: 43, cats: 30, effects: 26). Proposals
+engaged the actual codebase structure (Free Monad DSL, Iron refinement
+types, given/using syntax) rather than producing generic advice.
+
+**The dispatcher framing validated.** Seven prompt variants (01–07) all
+passed the bash-tool-use test. The terminal-operator identity + numbered
+step list was the winning pattern, with variant 07 (coordinator chain)
+dispatching all 4 specialists + recovering from errors in 24s.
+
+### What failed
+
+**Synthesizer was never dispatched.** The coordinator's agents.md
+specified Step 6: `scion start codebase-synthesizer`. Instead, Gemma:
+
+1. Used opencode's internal subagent feature (visible as "5 toolcalls ·
+   13.2s" in the tmux scrollback) to create its own synthesizers
+2. Generated synthesis prose directly — a "Summary of Findings" with
+   phased approach, effort estimates, and ranked recommendations
+3. Wrote output to `/workspace/proposals/` (invented path) instead of
+   `/workspace/reviews/` (path specified in agents.md)
+4. Produced a 57-line roadmap at `/workspace/proposals/roadmap.md` that
+   is structurally decent but lives at the wrong location
+5. Never called `sciontool status task_completed`
+
+**Specialist containers never exited.** All 4 specialists wrote their
+proposals but remained running (6+ minutes uptime at observation).
+The specialists didn't call `sciontool status task_completed` either —
+consistent with Gemma's weak task-lifecycle awareness.
+
+**Wrong output paths.** The coordinator invented `/workspace/proposals/`
+with dimensions named `syntax`, `types`, `architecture`, `testing` —
+none of which match the actual specialist names (`iron`, `syntax`,
+`cats`, `effects`). It appears to have hallucinated its own specialist
+taxonomy rather than reading the real proposals at `/workspace/reviews/`.
+
+### Root cause: the mode-switch problem
+
+Gemma 4 26B exhibits a **mode switch** at phase boundaries. When the
+task is "execute N similar `scion start` commands," Gemma stays in
+bash-execution mode and chains them correctly. But when the task
+transitions to a conceptually different phase — "now spawn the
+synthesizer" — Gemma drops out of execution mode and into its default
+content-generation mode.
+
+Contributing factors:
+
+- **The word "synthesizer" triggers generation.** Unlike "reviewer"
+  (which implies reading), "synthesizer" implies producing output —
+  exactly what an LLM is trained to do. The model takes the synthesis
+  task as its own rather than delegating it.
+- **Seeing proposal file paths triggers reading.** When the task
+  mentions that proposals exist, Gemma's instinct is to read and
+  summarize them rather than spawning another agent to do so.
+- **Phase boundary breaks the execution loop.** The 4 specialist
+  dispatches feel like a complete unit. The synthesizer dispatch after a
+  conceptual "wait for proposals" gap breaks the momentum of the
+  bash-execution loop.
+- **opencode's internal subagent feature provides an easier path.**
+  The model discovered it could create subagents within its own session
+  rather than using `scion start`. This is a harness-specific escape
+  hatch that bypasses the dispatcher constraint.
+
+### Prompt engineering test results
+
+A test harness (`scripts/test-gemma-dispatch.sh`) was built to iterate on
+prompt variants. System prompt + task pairs are tested against
+`opencode run --format json` with JSONL parsing to detect bash tool
+invocations.
+
+**Phase 1 results (specialist dispatch, variants 01–07):**
+
+| Variant | Strategy | Result | Time |
+|---|---|---|---|
+| 01-baseline | Existing dispatcher prompt | PASS (3 scion-start) | 19s |
+| 02-terminal-operator | "Execute, never describe" | PASS (3 scion-start) | 22s |
+| 03-literal-command | Minimal context, raw command | PASS (1 scion-start) | 6s |
+| 04-few-shot | Worked example in system prompt | PASS (1 scion-start) | 9s |
+| 05-command-only | Forbid text responses | PASS (2 scion-start) | 7s |
+| 06-step-by-step | Numbered checklist | PASS (1 scion-start) | 6s |
+| 07-coordinator-chain | 4 specialists in sequence | PASS (5 scion-start) | 24s |
+
+All 7 passed. This confirmed Gemma CAN execute bash tool calls reliably.
+The failure in the real run is not about tool-use capability but about
+maintaining execution mode across phase boundaries.
+
+**Phase 2 (synthesizer dispatch, variants 08–13):** tests in progress.
+These isolate the specific failure: can Gemma dispatch `scion start
+codebase-synthesizer` when the task involves synthesis-shaped content?
+
+### Recommendations
+
+**1. Flatten the coordinator into a single numbered command list.**
+Instead of separate "dispatch phase" and "synthesis phase" with a
+polling gap, give the coordinator all 5 `scion start` commands (4
+specialists + 1 synthesizer) as a single numbered list. Variant 12
+(`12-synth-full-chain`) tests this approach. The poll-for-proposals step
+can be replaced by a fixed delay or moved to the synthesizer itself.
+
+**2. Consider splitting the coordinator into two agents.** A
+"dispatcher" agent issues the 4 specialist `scion start` commands and
+terminates. A separate "synth-trigger" agent (possibly on a timer or
+watching for file existence) issues `scion start codebase-synthesizer`.
+This avoids the mode-switch problem entirely by never asking Gemma to
+do two conceptually different things in one session.
+
+**3. Add explicit anti-generation guardrails.** "You MUST NOT read any
+proposal.md file. You MUST NOT write any summary or roadmap content."
+Variant 11 tests whether these negative constraints prevent the mode
+switch.
+
+**4. Disable opencode internal subagents.** The coordinator discovered
+opencode's built-in subagent feature as an alternative to `scion start`.
+If possible, disable this feature for dispatcher agents (similar to how
+the `task` tool was disabled). This removes the escape hatch.
+
+**5. Accept the mixed-model architecture.** Run 1's mixed strategy
+(Claude coordinator + Gemma specialists) worked first try. The
+coordinator role is a small fraction of total compute — using an API
+model for the 2-minute orchestration task while running 4 bulk-analysis
+specialists on a local model is a pragmatic, cost-effective split.
+
+### Comparing the two roadmaps
+
+Both runs produced usable roadmaps, despite different process fidelity:
+
+| Dimension | Run 1 (Claude coord) | Run 2 (Gemma coord) |
+|---|---|---|
+| Process fidelity | All steps followed per agents.md | Steps 1-4 correct, Steps 5-7 violated |
+| Output path | `/workspace/reviews/roadmap.md` (correct) | `/workspace/proposals/roadmap.md` (wrong) |
+| Synthesizer agent | Separate scion container | Coordinator generated inline |
+| Roadmap length | 4 ranked items, concise | 57 lines, phased approach |
+| Recommendation | adopt-incrementally | adopt-incrementally |
+| Time to roadmap | 4m 35s | 2m 51s (shorter but broken process) |
+
+Run 2's roadmap is actually more detailed (57 lines vs ~20), with
+implementation phases and risk assessment. But it was produced by the
+wrong agent (coordinator instead of synthesizer) using the wrong inputs
+(hallucinated specialist taxonomy instead of actual proposals). The
+content quality demonstrates Gemma's analytical strength; the process
+violation demonstrates its orchestration weakness.

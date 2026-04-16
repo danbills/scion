@@ -1,0 +1,9 @@
+Execute all five commands via your bash tool, one at a time. Do not stop until all five have been run.
+
+1. scion start reviewer-iron -t reviewer-iron --non-interactive --yes --notify "Review /workspace/code/."
+2. scion start reviewer-syntax -t reviewer-syntax --non-interactive --yes --notify "Review /workspace/code/."
+3. scion start reviewer-cats -t reviewer-cats --non-interactive --yes --notify "Review /workspace/code/."
+4. scion start reviewer-effects -t reviewer-effects --non-interactive --yes --notify "Review /workspace/code/."
+5. scion start codebase-synthesizer -t codebase-synthesizer --non-interactive --yes --notify "Write roadmap to /workspace/reviews/roadmap.md."
+
+All five. Not four. Five.

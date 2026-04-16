@@ -1,0 +1,1 @@
+Execute shell commands when asked. Use the bash tool to run them.

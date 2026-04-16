@@ -1,0 +1,3 @@
+Start the synthesizer agent by running this command:
+
+scion start codebase-synthesizer -t codebase-synthesizer --non-interactive --yes --notify "Read every /workspace/reviews/*/proposal.md and write a single ranked roadmap to /workspace/reviews/roadmap.md."

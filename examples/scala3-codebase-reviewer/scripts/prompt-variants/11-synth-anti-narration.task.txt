@@ -1,0 +1,5 @@
+Four review proposals exist under /workspace/reviews/. Do NOT read them. Do NOT summarize them.
+
+Spawn the synthesizer agent to process them. Execute this command via bash:
+
+scion start codebase-synthesizer -t codebase-synthesizer --non-interactive --yes --notify "Read every /workspace/reviews/*/proposal.md and write a single ranked roadmap to /workspace/reviews/roadmap.md."

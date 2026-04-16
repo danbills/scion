@@ -1,0 +1,4 @@
+Execute these commands in order using the bash tool:
+
+Step 1: ls /workspace/reviews/*/proposal.md
+Step 2: scion start codebase-synthesizer -t codebase-synthesizer --non-interactive --yes --notify "Read every /workspace/reviews/*/proposal.md and write a single ranked roadmap to /workspace/reviews/roadmap.md."

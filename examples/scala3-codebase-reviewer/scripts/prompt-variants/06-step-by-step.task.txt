@@ -1,0 +1,4 @@
+Execute these commands in order using the bash tool:
+
+Step 1: scion start reviewer-iron -t reviewer-iron --non-interactive --yes --notify "test"
+Step 2: echo "done"

@@ -1,0 +1,8 @@
+schema_version: "1"
+description: "PR Review Coordinator"
+agent_instructions: agents.md
+system_prompt: system-prompt.md
+default_harness_config: gemma-local
+max_turns: 200
+max_duration: "2h"
+detached: false

@@ -1,0 +1,50 @@
+diff --git a/core/src/main/scala/example/UserService.scala b/core/src/main/scala/example/UserService.scala
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/core/src/main/scala/example/UserService.scala
+@@ -0,0 +1,42 @@
++package example
++
++import java.sql.Connection
++import scala.collection.JavaConverters._
++import scala.concurrent.{ExecutionContext, Future}
++
++class UserService(conn: Connection) {
++
++  // Look up a user by id. Returns null if not found.
++  def lookup(id: String)(implicit ec: ExecutionContext): Future[Any] = Future {
++    val stmt = conn.prepareStatement("SELECT id, email, status FROM users WHERE id = ?")
++    stmt.setString(1, id)
++    val rs = stmt.executeQuery()
++    if (rs.next()) {
++      Map(
++        "id"     -> rs.getString("id"),
++        "email"  -> rs.getString("email"),
++        "status" -> rs.getString("status")
++      )
++    } else {
++      null
++    }
++  }
++
++  // Expire all sessions older than the given cutoff. Fire-and-forget.
++  def expireStale(cutoffEpochMillis: String)(implicit ec: ExecutionContext): Unit = {
++    val fut = Future {
++      val stmt = conn.prepareStatement("DELETE FROM sessions WHERE last_seen < ?")
++      stmt.setLong(1, cutoffEpochMillis.toLong)
++      stmt.executeUpdate()
++    }
++    fut.foreach(n => println(s"expired $n sessions"))
++  }
++
++  // Convert the java list of roles into a scala list.
++  def rolesFor(id: String): List[String] = {
++    val javaList = conn
++      .prepareStatement("SELECT role FROM user_roles WHERE user_id = '" + id + "'")
++      .executeQuery()
++    val out = new java.util.ArrayList[String]()
++    while (javaList.next()) out.add(javaList.getString(1))
++    out.asScala.toList
++  }
++}

@@ -1,0 +1,14 @@
+{
+  "number": 42,
+  "title": "Add UserService.lookup and batch expiry helper",
+  "body": "Adds a helper on UserService for looking users up by id and expiring stale sessions. Wraps JDBC calls in Futures.",
+  "author": { "login": "sample-author" },
+  "baseRefName": "main",
+  "headRefName": "feature/user-service",
+  "baseRefOid": "0000000000000000000000000000000000000000",
+  "headRefOid": "1111111111111111111111111111111111111111",
+  "labels": [],
+  "files": [
+    { "path": "core/src/main/scala/example/UserService.scala" }
+  ]
+}

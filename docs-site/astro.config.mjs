@@ -68,6 +68,9 @@ export default defineConfig({
 					label: 'Patterns',
 					items: [
 						{ label: 'Athenaeum Coordination', slug: 'patterns/athenaeum-coordination' },
+						{ label: 'PR Reviewer Demo', slug: 'patterns/pr-reviewer' },
+						{ label: 'Scala 3 Codebase Reviewer', slug: 'patterns/scala3-codebase-reviewer' },
+						{ label: 'Codebase Reviewer Post-Run', slug: 'patterns/scala3-codebase-reviewer-postmortem' },
 					],
 				},
 				{

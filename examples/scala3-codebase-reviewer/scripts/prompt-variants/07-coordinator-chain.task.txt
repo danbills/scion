@@ -1,0 +1,8 @@
+Dispatch all four Scala 3 review specialists. Run each of these commands via your bash tool, one at a time:
+
+1. scion start reviewer-iron -t reviewer-iron --non-interactive --yes "Review /workspace/code/ for Iron refinement opportunities."
+2. scion start reviewer-syntax -t reviewer-syntax --non-interactive --yes "Review /workspace/code/ for Scala 3 syntax modernization."
+3. scion start reviewer-cats -t reviewer-cats --non-interactive --yes "Review /workspace/code/ for cats-effect improvements."
+4. scion start reviewer-effects -t reviewer-effects --non-interactive --yes "Review /workspace/code/ for effect system analysis."
+
+Execute all four commands. Do not stop until all four have been run.

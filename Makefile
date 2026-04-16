@@ -14,7 +14,7 @@ GOLANGCI_LINT := $(shell command -v golangci-lint 2>/dev/null || echo $(shell go
 
 .DEFAULT_GOAL := help
 
-.PHONY: all build install test test-fast vet lint golangci-lint web web-typecheck fmt fmt-check ci ci-full clean help container-sciontool container-scion container-binaries
+.PHONY: all build install test test-fast vet lint golangci-lint web web-typecheck fmt fmt-check ci ci-full clean help container-sciontool container-scion container-binaries pr-reviewer-demo codebase-reviewer-demo
 
 ## all: Build the web frontend, then compile the Go binary with embedded assets
 all: web install
@@ -66,6 +66,17 @@ web:
 	@echo "Building web frontend..."
 	@cd web && npm install && npm run build
 	@echo "Web frontend built."
+
+## docs-site: Serve the documentation site locally with hot reload
+docs-site:
+	@echo "Starting docs-site dev server on http://localhost:4321/scion/ ..."
+	@cd docs-site && PATH=$$HOME/.local/bin:$$HOME/.bun/bin:$$PATH bun install && PATH=$$HOME/.local/bin:$$HOME/.bun/bin:$$PATH bun run dev
+
+## docs-site-build: Build the documentation site to docs-site/dist
+docs-site-build:
+	@echo "Building docs-site..."
+	@cd docs-site && PATH=$$HOME/.local/bin:$$HOME/.bun/bin:$$PATH bun install && PATH=$$HOME/.local/bin:$$HOME/.bun/bin:$$PATH bun run build
+	@echo "docs-site built to docs-site/dist/"
 
 ## container-sciontool: Cross-compile sciontool for Linux containers
 container-sciontool:
@@ -123,6 +134,14 @@ ci: fmt-check lint test-fast build
 ci-full: fmt-check web web-typecheck lint golangci-lint test-fast build
 	@echo ""
 	@echo "CI (full) passed."
+
+## pr-reviewer-demo: Run the PR-reviewer demo against fixtures/pr-sample-1 (gemma-local)
+pr-reviewer-demo:
+	@bash examples/pr-reviewer/scripts/review-pr.sh --fixture pr-sample-1
+
+## codebase-reviewer-demo: Run the Scala 3 codebase reviewer against danbills/ansible-scala (gemma-local)
+codebase-reviewer-demo:
+	@bash examples/scala3-codebase-reviewer/scripts/review-codebase.sh --repo danbills/ansible-scala
 
 ## clean: Remove build artifacts
 clean:

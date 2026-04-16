@@ -1,0 +1,8 @@
+schema_version: "1"
+description: "Scala 3 idiom conformance reviewer"
+agent_instructions: agents.md
+system_prompt: system-prompt.md
+default_harness_config: gemma-local
+max_turns: 100
+max_duration: "1h"
+detached: false

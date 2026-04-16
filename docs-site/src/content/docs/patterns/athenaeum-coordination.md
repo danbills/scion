@@ -439,3 +439,6 @@ game_runner -> party: "broadcast: PASS/FAIL"
 
 For a complete working grove that implements this pattern end-to-end, see
 the [scion-athenaeum repository](https://github.com/danbills/scion-athenaeum).
+
+For a second worked example — the same coordination shape applied to
+multi-dimensional PR review — see the [PR Reviewer Demo](/scion/patterns/pr-reviewer/).

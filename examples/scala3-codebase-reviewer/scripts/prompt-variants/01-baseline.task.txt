@@ -1,0 +1,3 @@
+Spawn the iron reviewer specialist. Run this command via your bash tool:
+
+scion start reviewer-iron -t reviewer-iron --non-interactive --yes --notify "Review the Scala 3 codebase under /workspace/code/. Write your proposal to /workspace/reviews/iron/proposal.md."

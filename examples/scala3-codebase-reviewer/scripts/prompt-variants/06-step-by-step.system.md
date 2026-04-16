@@ -1,0 +1,1 @@
+You will execute shell commands step by step using the bash tool. For each step, call the bash tool with the exact command shown. Do not skip steps. Do not add explanation.

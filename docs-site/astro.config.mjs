@@ -65,6 +65,12 @@ export default defineConfig({
 					],
 				},
 				{
+					label: 'Ideas',
+					items: [
+						{ label: 'Recursive Metacognition', slug: 'ideas/recursive-metacognition' },
+					],
+				},
+				{
 					label: 'Patterns',
 					items: [
 						{ label: 'Athenaeum Coordination', slug: 'patterns/athenaeum-coordination' },

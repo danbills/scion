@@ -67,6 +67,10 @@ export default defineConfig({
 				{
 					label: 'Patterns',
 					items: [
+						{ label: 'Overview', slug: 'patterns' },
+						{ label: 'Fan-out Parallel', slug: 'patterns/fan-out-parallel' },
+						{ label: 'Sequential Worklist', slug: 'patterns/sequential-worklist' },
+						{ label: 'Moderated Multi-Agent', slug: 'patterns/moderated-multi-agent' },
 						{ label: 'Athenaeum Coordination', slug: 'patterns/athenaeum-coordination' },
 					],
 				},

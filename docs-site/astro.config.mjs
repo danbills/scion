@@ -73,6 +73,10 @@ export default defineConfig({
 				{
 					label: 'Patterns',
 					items: [
+						{ label: 'Overview', slug: 'patterns' },
+						{ label: 'Fan-out Parallel', slug: 'patterns/fan-out-parallel' },
+						{ label: 'Sequential Worklist', slug: 'patterns/sequential-worklist' },
+						{ label: 'Moderated Multi-Agent', slug: 'patterns/moderated-multi-agent' },
 						{ label: 'Athenaeum Coordination', slug: 'patterns/athenaeum-coordination' },
 						{ label: 'PR Reviewer Demo', slug: 'patterns/pr-reviewer' },
 						{ label: 'Scala 3 Codebase Reviewer', slug: 'patterns/scala3-codebase-reviewer' },

@@ -5,7 +5,7 @@ description: Configuring LLM credentials for Scion agents to access model provid
 
 Scion automatically handles discovering and injecting LLM credentials into agent containers so that the underlying harnesses (Claude, Gemini, etc.) can authenticate with their respective model providers (Anthropic, Google, OpenAI). 
 
-> **Note**: This documentation focuses entirely on how harnesses gain access to LLM models. It does not cover how the agent authenticates to other services (like GitHub or external APIs).
+> **Note**: This documentation covers how harnesses gain access to LLM models, as well as how agents authenticate to Git repositories.
 
 ## Local vs. Hub Deployment
 
@@ -74,10 +74,11 @@ scion hub secret set GEMINI_API_KEY "AIza..."
 
 ### Vertex Model Garden (`vertex-ai`)
 
-Uses Google Cloud's Vertex AI endpoints with Application Default Credentials (ADC).
+Uses Google Cloud's Vertex AI endpoints with Application Default Credentials (ADC). Scion supports two primary ways to authenticate in Hub mode: via an assigned GCP Identity (Service Account) or an injected ADC file secret.
 
 **Required Sources:**
-- ADC JSON file: Automatically discovered at `~/.config/gcloud/application_default_credentials.json` if present locally. In Hub mode, upload via the `gcloud-adc` file secret.
+- **Assigned GCP Identity** (Hub Mode): If the agent is assigned a Hub-managed GCP Service Account via metadata emulation, Vertex AI will automatically use it. This is the recommended and most secure approach.
+- **ADC JSON file** (Fallback/Local): Automatically discovered at `~/.config/gcloud/application_default_credentials.json` if present locally. In Hub mode, you can upload an ADC file via the `gcloud-adc` file secret or specify the `GOOGLE_APPLICATION_CREDENTIALS` environment variable pointing to a custom credential file.
 - `GOOGLE_CLOUD_PROJECT`: Your Google Cloud project ID.
 - `GOOGLE_CLOUD_REGION`: The region (e.g., `us-east5`). Required for Claude, optional but recommended for Gemini.
 
@@ -90,7 +91,9 @@ scion start --harness claude my-agent
 ```
 
 **Hub Setup:**
-For Hub mode, you must upload the ADC file as the `gcloud-adc` file secret and set the environment variables via the Web Interface or CLI:
+For Hub mode, the recommended approach is to assign a GCP Service Account to the agent at creation time.
+
+Alternatively, to use an ADC file secret:
 ```bash
 # 1. Upload the ADC credential file (written to ~/.config/gcloud/application_default_credentials.json in container)
 scion hub secret set --type file \
@@ -103,7 +106,8 @@ scion hub secret set GOOGLE_CLOUD_REGION "us-east5"
 ```
 
 :::note
-The `gcloud-adc` secret writes the ADC file to the well-known GCP path inside the container. The GCP SDK auto-discovers it there, so Scion does **not** set the `GOOGLE_APPLICATION_CREDENTIALS` environment variable. If you need to use `GOOGLE_APPLICATION_CREDENTIALS` for other purposes (e.g., pointing to a non-standard path), set it up as a separate environment-type secret alongside a file secret that writes the credential file.
+**Direct Hub secret access from agents is explicitly blocked for security.** The Hub injects secrets into the agent at startup.
+The `gcloud-adc` secret automatically writes the ADC file to the well-known GCP path inside the container. Scion does **not** set the `GOOGLE_APPLICATION_CREDENTIALS` environment variable by default when using `gcloud-adc`. If you need to use `GOOGLE_APPLICATION_CREDENTIALS` as an alternative for Vertex AI or to point to a non-standard path, set it up as a standard environment variable secret alongside your file secret.
 :::
 
 ### Harness specific credential file (`auth-file`)
@@ -128,6 +132,14 @@ scion hub secret set --type file \
 
 ---
 
+## Agent Progeny & Secret Access
+
+When an agent creates sub-agents (progeny), Scion enforces strict controls over which secrets those child agents can access. 
+
+By default, child agents operate under a **granular secret access** model. They do not automatically inherit all secrets from the grove or their parent. Instead, they only have access to the credentials necessary to perform their specific tasks, maintaining a least-privilege security boundary across the agent ancestry chain. 
+
+---
+
 ## Troubleshooting
 
 ### "no valid auth method found"
@@ -138,3 +150,26 @@ You have configured the **Explicit Path** (e.g., selecting `vertex-ai`) but the 
 
 ### Vertex AI not activating
 For Claude, Vertex Model Garden requires **all three** variables: credentials, project, and region. If any are missing, it will not authenticate. For Gemini, both credentials and a project are required. Ensure these are set either in your local environment or as Hub secrets.
+## Git Authentication
+
+Scion agents frequently need to interact with remote Git repositories to push changes, open PRs, or sync states. Authentication with GitHub is handled securely using native GitHub App integration or Personal Access Tokens (PATs).
+
+### GitHub App Integration (Recommended)
+
+Scion provides deep integration with GitHub Apps to manage Git credentials automatically, eliminating the need to manage static PATs.
+
+1. **Automated Token Refresh**: The Scion Hub maintains a background refresh loop that constantly mints valid installation tokens for your GitHub App.
+2. **Credential Helper**: Scion injects `sciontool` as a Git credential helper into the agent container (`git config --global credential.helper`).
+3. **On-Demand Tokens**: When the agent executes a `git clone`, `push`, or `pull`, Git asks the credential helper for a password. `sciontool` retrieves the fresh, short-lived token provided by the Hub, ensuring operations never fail due to token expiration—even for long-running agents.
+
+This flow is automatically enabled for any grove linked to a GitHub App installation.
+
+### Personal Access Tokens (PATs)
+
+If GitHub App integration is not available, you can use a Personal Access Token. When using a PAT:
+
+1. You create a fine-grained PAT on GitHub.
+2. You provide the PAT to the Hub as a secret named `GITHUB_TOKEN`.
+3. Scion injects this token into the agent container as an environment variable (`GITHUB_TOKEN`), which Git uses for HTTPS authentication.
+
+For detailed instructions on setting this up, see [Git-Based Groves](/scion/hub-user/git-groves/).

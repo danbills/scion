@@ -266,6 +266,153 @@ func TestChannelEventPublisher_PublishGroveCreated(t *testing.T) {
 	}
 }
 
+func TestChannelEventPublisher_PublishUserMessage_FanOut(t *testing.T) {
+	// Verify a single PublishUserMessage call fans out to all three
+	// subjects: user.<recipient>.message, grove.<grove>.user.message,
+	// and agent.<agent>.message (the last one is what the per-agent
+	// Messages tab stream subscribes to).
+	pub := NewChannelEventPublisher()
+	defer pub.Close()
+
+	userCh, unsubUser := pub.Subscribe("user.u1.message")
+	defer unsubUser()
+	groveCh, unsubGrove := pub.Subscribe("grove.g1.user.message")
+	defer unsubGrove()
+	agentCh, unsubAgent := pub.Subscribe("agent.a1.message")
+	defer unsubAgent()
+
+	msg := &store.Message{
+		ID:          "m1",
+		GroveID:     "g1",
+		Sender:      "agent:coder",
+		SenderID:    "a1",
+		Recipient:   "user:alice",
+		RecipientID: "u1",
+		Msg:         "All done.",
+		Type:        "assistant-reply",
+		AgentID:     "a1",
+		CreatedAt:   time.Now().UTC(),
+	}
+
+	pub.PublishUserMessage(context.Background(), msg)
+
+	for name, ch := range map[string]<-chan Event{
+		"user":  userCh,
+		"grove": groveCh,
+		"agent": agentCh,
+	} {
+		select {
+		case evt := <-ch:
+			var payload UserMessageEvent
+			if err := json.Unmarshal(evt.Data, &payload); err != nil {
+				t.Fatalf("%s: unmarshal: %v", name, err)
+			}
+			if payload.ID != "m1" || payload.AgentID != "a1" ||
+				payload.RecipientID != "u1" || payload.Msg != "All done." {
+				t.Errorf("%s: unexpected payload: %+v", name, payload)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("%s: timeout waiting for user message event", name)
+		}
+	}
+}
+
+func TestChannelEventPublisher_PublishUserMessage_UserToAgent(t *testing.T) {
+	// When the message direction is user→agent, only the per-agent
+	// subject should fire. The user-inbox and grove-level subjects
+	// should NOT receive events because the recipient is an agent.
+	pub := NewChannelEventPublisher()
+	defer pub.Close()
+
+	userCh, unsubUser := pub.Subscribe("user.a1.message")
+	defer unsubUser()
+	groveCh, unsubGrove := pub.Subscribe("grove.g1.user.message")
+	defer unsubGrove()
+	agentCh, unsubAgent := pub.Subscribe("agent.a1.message")
+	defer unsubAgent()
+
+	msg := &store.Message{
+		ID:          "m2",
+		GroveID:     "g1",
+		Sender:      "user:alice",
+		SenderID:    "u1",
+		Recipient:   "agent:coder",
+		RecipientID: "a1",
+		Msg:         "Please fix the tests.",
+		Type:        "instruction",
+		AgentID:     "a1",
+		CreatedAt:   time.Now().UTC(),
+	}
+
+	pub.PublishUserMessage(context.Background(), msg)
+
+	// Agent channel should receive the event.
+	select {
+	case evt := <-agentCh:
+		var payload UserMessageEvent
+		if err := json.Unmarshal(evt.Data, &payload); err != nil {
+			t.Fatalf("agent: unmarshal: %v", err)
+		}
+		if payload.ID != "m2" || payload.SenderID != "u1" || payload.Msg != "Please fix the tests." {
+			t.Errorf("agent: unexpected payload: %+v", payload)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("agent: timeout waiting for user message event")
+	}
+
+	// User-inbox and grove channels should NOT receive anything.
+	select {
+	case evt := <-userCh:
+		t.Errorf("user channel should not receive user→agent messages, got: %s", evt.Data)
+	case <-time.After(100 * time.Millisecond):
+		// expected
+	}
+	select {
+	case evt := <-groveCh:
+		t.Errorf("grove channel should not receive user→agent messages, got: %s", evt.Data)
+	case <-time.After(100 * time.Millisecond):
+		// expected
+	}
+}
+
+func TestChannelEventPublisher_PublishUserMessage_Broadcasted(t *testing.T) {
+	// Verify the Broadcasted field is carried through to the event payload.
+	pub := NewChannelEventPublisher()
+	defer pub.Close()
+
+	ch, unsub := pub.Subscribe("agent.a1.message")
+	defer unsub()
+
+	msg := &store.Message{
+		ID:          "m3",
+		GroveID:     "g1",
+		Sender:      "user:alice",
+		SenderID:    "u1",
+		Recipient:   "agent:coder",
+		RecipientID: "a1",
+		Msg:         "Broadcast msg",
+		Type:        "instruction",
+		Broadcasted: true,
+		AgentID:     "a1",
+		CreatedAt:   time.Now().UTC(),
+	}
+
+	pub.PublishUserMessage(context.Background(), msg)
+
+	select {
+	case evt := <-ch:
+		var payload UserMessageEvent
+		if err := json.Unmarshal(evt.Data, &payload); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if !payload.Broadcasted {
+			t.Error("expected Broadcasted to be true in event payload")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for event")
+	}
+}
+
 func TestChannelEventPublisher_PublishBrokerConnected(t *testing.T) {
 	pub := NewChannelEventPublisher()
 	defer pub.Close()

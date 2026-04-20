@@ -352,6 +352,7 @@ export interface HarnessAdvancedCapabilities {
   auth: {
     api_key: CapabilityField;
     auth_file: CapabilityField;
+    oauth_token: CapabilityField;
     vertex_ai: CapabilityField;
   };
 }
@@ -576,7 +577,7 @@ export interface Message {
   type: string;
   urgent?: boolean;
   broadcasted?: boolean;
-  read: boolean;
+  read?: boolean;
   agentId: string;
   createdAt: string;
 }

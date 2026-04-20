@@ -118,12 +118,12 @@ Secrets are typed to control how they reach the agent container:
 - **`variable`**: Written to `~/.scion/secrets.json` inside the container.
 - **`file`**: Written to a specified filesystem path (max 64 KiB).
 
-### 4.4 API Keys
+### 4.4 Personal Access Tokens (PATs)
 
-For headless environments (CI/CD, automation), Scion supports **API Keys**.
-- Keys are prefixed with `sk_live_` or `sk_test_`.
-- Only the SHA-256 hash of the key is stored in the database; the original value is never persisted.
-- Keys can be scoped to specific permissions and revoked instantly via the dashboard.
+For headless environments (CI/CD, automation), Scion supports **Personal Access Tokens**.
+- Tokens are prefixed with `scion_pat_`.
+- Only the SHA-256 hash of the token is stored in the database; the original value is never persisted.
+- Tokens can be scoped to specific permissions and groves, and revoked instantly via the dashboard or CLI.
 
 ### 4.5 Credentials Propagation
 

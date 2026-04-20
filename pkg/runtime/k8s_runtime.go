@@ -26,6 +26,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -51,6 +52,13 @@ type KubernetesRuntime struct {
 	GKEAutoDetected   bool // True when GKE was auto-detected (enables Autopilot tolerance only)
 	ListAllNamespaces bool // When true, List() queries all namespaces for scion pods
 }
+
+// agentContainerName is the name of the primary scion agent container in
+// every pod we create. It must be specified on every PodExec call so that
+// admission-controller-injected sidecars (Istio, Linkerd, Dynatrace, etc.)
+// do not cause the API server to reject the exec request with an
+// "a container name must be specified" error.
+const agentContainerName = "agent"
 
 var serviceAccountNamespacePath = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
 
@@ -1040,7 +1048,7 @@ func (r *KubernetesRuntime) buildPod(namespace string, config RunConfig) (*corev
 			SecurityContext: podSecurityContext,
 			Containers: []corev1.Container{
 				{
-					Name:            "agent",
+					Name:            agentContainerName,
 					Image:           config.Image,
 					Command:         cmd,
 					Env:             envVars,
@@ -1314,7 +1322,7 @@ func (r *KubernetesRuntime) waitForPodReady(ctx context.Context, namespace, podN
 			// Check container statuses for more detail
 			var containerStatus *corev1.ContainerStatus
 			for _, cs := range pod.Status.ContainerStatuses {
-				if cs.Name == "agent" {
+				if cs.Name == agentContainerName {
 					containerStatus = &cs
 					break
 				}
@@ -1416,11 +1424,12 @@ func (r *KubernetesRuntime) syncToPod(ctx context.Context, namespace, podName, s
 		SubResource("exec")
 
 	option := &corev1.PodExecOptions{
-		Command: cmd,
-		Stdin:   true,
-		Stdout:  true,
-		Stderr:  true,
-		TTY:     false,
+		Container: agentContainerName,
+		Command:   cmd,
+		Stdin:     true,
+		Stdout:    true,
+		Stderr:    true,
+		TTY:       false,
 	}
 
 	req.VersionedParams(
@@ -1479,11 +1488,12 @@ func (r *KubernetesRuntime) syncFromPod(ctx context.Context, namespace, podName,
 		SubResource("exec")
 
 	option := &corev1.PodExecOptions{
-		Command: cmd,
-		Stdin:   false,
-		Stdout:  true,
-		Stderr:  true,
-		TTY:     false,
+		Container: agentContainerName,
+		Command:   cmd,
+		Stdin:     false,
+		Stdout:    true,
+		Stderr:    true,
+		TTY:       false,
 	}
 
 	req.VersionedParams(
@@ -1623,7 +1633,7 @@ func (r *KubernetesRuntime) List(ctx context.Context, labelFilter map[string]str
 
 		// Try to get more detail from container status
 		for _, cs := range p.Status.ContainerStatuses {
-			if cs.Name == "agent" {
+			if cs.Name == agentContainerName {
 				if cs.State.Waiting != nil {
 					status = fmt.Sprintf("%s (%s)", p.Status.Phase, cs.State.Waiting.Reason)
 				} else if cs.State.Terminated != nil {
@@ -1645,6 +1655,14 @@ func (r *KubernetesRuntime) List(ctx context.Context, labelFilter map[string]str
 			grovePath = p.Labels["scion.grove_path"]
 		}
 
+		var agentImage string
+		for _, c := range p.Spec.Containers {
+			if c.Name == agentContainerName {
+				agentImage = c.Image
+				break
+			}
+		}
+
 		agents = append(agents, api.AgentInfo{
 			ContainerID:     p.Name, // Pod name serves as the container identifier
 			Name:            p.Labels["scion.name"],
@@ -1656,7 +1674,7 @@ func (r *KubernetesRuntime) List(ctx context.Context, labelFilter map[string]str
 			Annotations:     p.Annotations,
 			ContainerStatus: status,
 			Phase:           agentStatus,
-			Image:           p.Spec.Containers[0].Image,
+			Image:           agentImage,
 			Runtime:         r.Name(),
 			Kubernetes: &api.AgentK8sMetadata{
 				Namespace: p.Namespace,
@@ -1679,7 +1697,7 @@ func (r *KubernetesRuntime) GetLogs(ctx context.Context, id string) (string, err
 		namespace = r.resolveNamespace(ctx, podName)
 	}
 
-	req := r.Client.Clientset.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{})
+	req := r.Client.Clientset.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{Container: agentContainerName})
 	podLogs, err := req.Stream(ctx)
 	if err != nil {
 		return "", err
@@ -1748,16 +1766,21 @@ func (r *KubernetesRuntime) Attach(ctx context.Context, id string) error {
 		username = u
 	}
 
+	// Validate username to prevent shell injection via pod annotations.
+	if !regexp.MustCompile(`^[a-zA-Z0-9_-]+$`).MatchString(username) {
+		return fmt.Errorf("invalid username in pod annotation: %q", username)
+	}
+
 	// Build the exec command. If the container already runs as the target
 	// user (common on GKE Autopilot where allowPrivilegeEscalation=false),
 	// skip the su wrapper — it would prompt for a password.
 	// Use a shell wrapper that checks the current user at runtime.
 	execCmd := []string{"sh", "-c", fmt.Sprintf(
-		`if [ "$(whoami)" = "%s" ]; then exec tmux attach -t scion; else exec su - %s -c "tmux attach -t scion"; fi`,
-		username, username)}
+		`target=%q; if [ "$(whoami)" = "$target" ]; then exec tmux attach -t scion; else exec su - "$target" -c "tmux attach -t scion"; fi`,
+		username)}
 
 	option := &corev1.PodExecOptions{
-		Container: "agent",
+		Container: agentContainerName,
 		Command:   execCmd,
 		Stdin:     true,
 		Stdout:    true,
@@ -2021,7 +2044,7 @@ func (r *KubernetesRuntime) Exec(ctx context.Context, id string, cmd []string) (
 	suCmd := []string{"su", "-", "scion", "-c", strings.Join(quoted, " ")}
 
 	option := &corev1.PodExecOptions{
-		Container: "agent",
+		Container: agentContainerName,
 		Command:   suCmd,
 		Stdin:     false,
 		Stdout:    true,
@@ -2066,7 +2089,7 @@ func (r *KubernetesRuntime) execInPod(ctx context.Context, namespace, podName st
 		SubResource("exec")
 
 	option := &corev1.PodExecOptions{
-		Container: "agent",
+		Container: agentContainerName,
 		Command:   cmd,
 		Stdin:     false,
 		Stdout:    true,

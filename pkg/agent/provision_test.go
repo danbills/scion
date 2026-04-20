@@ -1124,6 +1124,154 @@ func TestGetAgentGitClone_ClearsExistingWorkspace(t *testing.T) {
 	}
 }
 
+// TestProvisionAgent_SharedWorkspaceRelocatesAgentState verifies that when
+// SharedWorkspace context is set, the agent's prompt.md and scion-agent.json
+// land at the external grove-configs path rather than inside the grove tree.
+// This is the structural fix from .design/hub-shared-workspace-isolation.md
+// — sibling agents must not see each other's state via /workspace.
+func TestProvisionAgent_SharedWorkspaceRelocatesAgentState(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	oldWd, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(oldWd)
+
+	originalHome := os.Getenv("HOME")
+	defer os.Setenv("HOME", originalHome)
+	os.Setenv("HOME", tmpDir)
+
+	globalScionDir := filepath.Join(tmpDir, ".scion")
+	os.MkdirAll(filepath.Join(globalScionDir, "templates"), 0755)
+	seedTestHarnessConfig(t, globalScionDir, "gemini", "gemini")
+	tplDir := filepath.Join(globalScionDir, "templates", "gemini")
+	os.MkdirAll(tplDir, 0755)
+	os.WriteFile(filepath.Join(tplDir, "scion-agent.json"), []byte(`{"default_harness_config":"gemini"}`), 0644)
+
+	// Project dir with .scion as a directory plus grove-id (split storage).
+	projectDir := filepath.Join(tmpDir, "project")
+	projectScionDir := filepath.Join(projectDir, ".scion")
+	os.MkdirAll(projectScionDir, 0755)
+	if err := config.WriteGroveID(projectScionDir, "550e8400-e29b-41d4-a716-446655440000"); err != nil {
+		t.Fatalf("WriteGroveID failed: %v", err)
+	}
+
+	sharedWorkspace := filepath.Join(tmpDir, "shared-ws")
+	os.MkdirAll(sharedWorkspace, 0755)
+
+	ctx := api.ContextWithSharedWorkspace(context.Background())
+
+	rt := &runtime.MockRuntime{}
+	mgr := NewManager(rt)
+	opts := api.StartOptions{
+		Name:            "shared-agent",
+		Task:            "do the thing",
+		Template:        "gemini",
+		GrovePath:       projectScionDir,
+		Workspace:       sharedWorkspace,
+		SharedWorkspace: true,
+	}
+	if _, err := mgr.Provision(ctx, opts); err != nil {
+		t.Fatalf("Provision failed: %v", err)
+	}
+
+	// External per-agent dir must contain prompt.md and scion-agent.json.
+	extAgentDir := filepath.Join(tmpDir, ".scion", "grove-configs", "project__550e8400", ".scion", "agents", "shared-agent")
+	if _, err := os.Stat(filepath.Join(extAgentDir, "prompt.md")); err != nil {
+		t.Errorf("expected prompt.md at external path %s: %v", extAgentDir, err)
+	}
+	if _, err := os.Stat(filepath.Join(extAgentDir, "scion-agent.json")); err != nil {
+		t.Errorf("expected scion-agent.json at external path %s: %v", extAgentDir, err)
+	}
+	taskBytes, err := os.ReadFile(filepath.Join(extAgentDir, "prompt.md"))
+	if err == nil && string(taskBytes) != "do the thing" {
+		t.Errorf("prompt.md content = %q, want %q", string(taskBytes), "do the thing")
+	}
+
+	// In-grove agent dir must NOT exist for shared-workspace agents — that
+	// is the whole point of the isolation. (Empty-but-present would also
+	// leak the agent name to siblings.)
+	inGroveAgentDir := filepath.Join(projectScionDir, "agents", "shared-agent")
+	if _, err := os.Stat(inGroveAgentDir); err == nil {
+		t.Errorf("expected no in-grove agent dir at %s, but it exists", inGroveAgentDir)
+	}
+}
+
+// TestProvisionAgent_SharedWorkspaceMigratesLegacyState verifies that an
+// agent provisioned under the old layout (prompt.md / scion-agent.json
+// in-grove) gets its state moved to the external path on next provision.
+func TestProvisionAgent_SharedWorkspaceMigratesLegacyState(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	oldWd, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(oldWd)
+
+	originalHome := os.Getenv("HOME")
+	defer os.Setenv("HOME", originalHome)
+	os.Setenv("HOME", tmpDir)
+
+	globalScionDir := filepath.Join(tmpDir, ".scion")
+	os.MkdirAll(filepath.Join(globalScionDir, "templates"), 0755)
+	seedTestHarnessConfig(t, globalScionDir, "gemini", "gemini")
+	tplDir := filepath.Join(globalScionDir, "templates", "gemini")
+	os.MkdirAll(tplDir, 0755)
+	os.WriteFile(filepath.Join(tplDir, "scion-agent.json"), []byte(`{"default_harness_config":"gemini"}`), 0644)
+
+	projectDir := filepath.Join(tmpDir, "project")
+	projectScionDir := filepath.Join(projectDir, ".scion")
+	os.MkdirAll(projectScionDir, 0755)
+	if err := config.WriteGroveID(projectScionDir, "550e8400-e29b-41d4-a716-446655440000"); err != nil {
+		t.Fatalf("WriteGroveID failed: %v", err)
+	}
+
+	// Seed legacy in-grove state from a pre-isolation provisioning.
+	legacyDir := filepath.Join(projectScionDir, "agents", "legacy-agent")
+	if err := os.MkdirAll(legacyDir, 0755); err != nil {
+		t.Fatalf("mkdir legacyDir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyDir, "prompt.md"), []byte("old task"), 0644); err != nil {
+		t.Fatalf("write legacy prompt.md: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyDir, "scion-agent.json"), []byte(`{"harness":"gemini"}`), 0644); err != nil {
+		t.Fatalf("write legacy scion-agent.json: %v", err)
+	}
+
+	sharedWorkspace := filepath.Join(tmpDir, "shared-ws")
+	os.MkdirAll(sharedWorkspace, 0755)
+
+	ctx := api.ContextWithSharedWorkspace(context.Background())
+	rt := &runtime.MockRuntime{}
+	mgr := NewManager(rt)
+	opts := api.StartOptions{
+		Name:            "legacy-agent",
+		Template:        "gemini",
+		GrovePath:       projectScionDir,
+		Workspace:       sharedWorkspace,
+		SharedWorkspace: true,
+	}
+	if _, err := mgr.Provision(ctx, opts); err != nil {
+		t.Fatalf("Provision failed: %v", err)
+	}
+
+	// Legacy file must have been moved out — no prompt.md in the grove tree.
+	if _, err := os.Stat(filepath.Join(legacyDir, "prompt.md")); err == nil {
+		t.Errorf("legacy in-grove prompt.md still exists after migration")
+	}
+	if _, err := os.Stat(filepath.Join(legacyDir, "scion-agent.json")); err == nil {
+		t.Errorf("legacy in-grove scion-agent.json still exists after migration")
+	}
+
+	// External path must contain the migrated content.
+	extAgentDir := filepath.Join(tmpDir, ".scion", "grove-configs", "project__550e8400", ".scion", "agents", "legacy-agent")
+	data, err := os.ReadFile(filepath.Join(extAgentDir, "prompt.md"))
+	if err != nil {
+		t.Fatalf("expected prompt.md at external path: %v", err)
+	}
+	if string(data) != "old task" {
+		t.Errorf("migrated prompt.md content = %q, want %q", string(data), "old task")
+	}
+}
+
 // TestProvisionAgent_SharedWorkspaceCredentialHelper verifies that when
 // SharedWorkspace context is set, ProvisionAgent writes a git credential
 // helper to the agent's home .gitconfig.

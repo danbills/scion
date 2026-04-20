@@ -275,6 +275,10 @@ Audited all in-container CLI operations to verify they route through the Hub API
 
 ---
 
+## Follow-up: Shared-Workspace Groves
+
+Phase 3 of this design moved agent **homes** out of the in-grove `.scion/agents/<name>/home/` path, but in groves where every agent shares a single workspace mount (`sharedWorkspace = true`, used by hub-hosted git groves), the rest of the per-agent state — `prompt.md` and `scion-agent.json` — was still visible to sibling agents through the shared `/workspace/.scion/agents/<name>/` view. That residual gap is closed in [`hub-shared-workspace-isolation.md`](./hub-shared-workspace-isolation.md), which extends the same external-path model to those files when the grove is in shared-workspace mode.
+
 ## Open Questions (Resolved)
 
 | Question | Resolution |

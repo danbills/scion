@@ -20,7 +20,7 @@ Scion supports multiple authentication methods for different use cases:
 
 - **OAuth (Google/GitHub)**: For production web and CLI authentication.
 - **Development Auth**: For local development and testing.
-- **API Keys**: For programmatic access and CI/CD pipelines.
+- **Personal Access Tokens (PATs)**: For programmatic access and CI/CD pipelines.
 
 ## OAuth Authentication
 
@@ -144,26 +144,43 @@ When creating an agent, you can configure its **GCP Identity Mode**:
   - The agent's `sciontool` sidecar intercepts requests to the metadata server.
   - Token requests are proxied to the Scion Hub, which uses its own broad permissions to generate a short-lived access token for the requested Service Account (via the `iam.serviceAccounts.getAccessToken` permission).
   - The token is then returned to the agent, allowing it to use standard GCP SDKs (Application Default Credentials) as that specific Service Account.
-- **Passthrough**: Requests are allowed to reach the actual host metadata server. Use with caution as this allows the agent to assume the identity of the underlying node.
+- **Passthrough**: Requests are allowed to reach the actual host metadata server. Use with caution as this allows the agent to assume the identity of the underlying node. Security is tightened by restricting GCP identity passthrough to broker owners only.
 
-### Management UI
+### Management UI & Hub-Minted Service Accounts
 
 Administrators can manage available Service Accounts through the **Service Accounts** section in the Admin dashboard. 
 - **Registration**: Register existing GCP Service Accounts by email.
-- **Validation**: Scion verifies that the Hub has the necessary permissions to act as the registered Service Account.
-- **Assignment**: Once registered, Service Accounts can be assigned to agents during the creation flow.
+- **Hub-Minted Accounts**: The Hub can directly manage and provision (mint) GCP service accounts based on your quota dashboard and capability controls.
+- **Validation**: Scion auto-verifies that the Hub has the necessary permissions to act as the registered Service Account upon registration.
+- **Assignment & Defaults**: Service Accounts can be assigned to agents during the creation flow. Groves also support default GCP identities that are automatically applied in the agent creation form.
 
 ### Security & Auditing
 
 - **Iptables Interception**: Scion uses `iptables` (when `NET_ADMIN` capability is available) to redirect traffic from `169.254.169.254:80` to the local sidecar.
+- **Authorization Checks**: Administrative actions for GCP Service Account management require `grove-owner` (`ActionManage`) permissions to enforce strict authorization boundaries.
 - **Rate Limiting**: Token requests are rate-limited per-agent to prevent abuse.
 - **Audit Logging**: All token issuance events are logged at the Hub level with the requesting `agent_id` and `user_id`.
+
+## GitHub App Integration
+
+Scion supports native GitHub App integration for secure, automated agent authentication with GitHub repositories. This provides a robust alternative to static personal access tokens.
+
+### Features
+- **Native Auth**: Uses JWT-based authentication and automated installation token minting.
+- **Automated Token Refresh**: A background refresh loop ensures long-running agents always have valid git credentials.
+- **Git Credential Helper**: The `sciontool` injects a credential helper into the agent environment, providing fresh tokens to `git` on-demand.
+- **Commit Attribution**: Supports per-grove git identity configuration to ensure commits are authored correctly.
+- **Admin Management**: Global monitoring of installations, rate limits, and status via the "GitHub App" tab in the Admin Server Config UI.
+
+### Grove Association
+Groves can be linked to specific GitHub App installations. The system automatically associates GitHub App installations at grove creation time, streamlining the authentication flow for private repositories. Grove settings provide visual indicators and permission badges for real-time feedback on integration health.
+
 
 ## CLI Authentication
 
 Users can authenticate the CLI against a Scion Hub using the following flow:
 
-1.  **Login**: `scion hub auth login` opens a browser to the dashboard login page.
+1.  **Login**: `scion auth login` opens a browser to the dashboard login page.
 2.  **Exchange**: After successful login, the dashboard provides a token (or the CLI exchanges a code).
 3.  **Storage**: The token is stored in `~/.scion/config.json`.
 
@@ -174,9 +191,9 @@ Agents are automatically authenticated. When the Hub dispatches an agent to a Ru
 - Tokens are scoped to the specific agent and its grove.
 - Tokens have a default expiration (typically 24 hours), but Scion implements an automated token refresh mechanism to ensure long-running agents maintain valid authorization throughout extended tasks.
 
-## API Keys
+## Personal Access Tokens
 
-For programmatic access (e.g., CI/CD pipelines), the Hub supports API Keys.
-- Keys can be generated via the Web Dashboard or CLI.
-- Keys are prefixed with `sk_live_` or `sk_test_`.
-- Use the `Authorization: Bearer <key>` header or `X-API-Key` header in your requests.
+For programmatic access (e.g., CI/CD pipelines), the Hub supports Personal Access Tokens (PATs).
+- Tokens can be generated via the Web Dashboard or CLI.
+- Tokens are prefixed with `scion_pat_`.
+- Use the `Authorization: Bearer <token>` header in your requests.

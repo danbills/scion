@@ -117,14 +117,20 @@ func DeleteAgentFiles(agentName string, grovePath string, removeBranch bool) (bo
 		util.Debugf("delete: removal completed in %v", time.Since(removeStart))
 	}
 
-	// Phase 3: remove external agent home (git grove split storage).
+	// Phase 3: remove the external per-agent state directory (git grove split
+	// storage). For worktree-mode agents this contains only home/. For
+	// shared-workspace agents this also contains prompt.md and scion-agent.json
+	// (relocated to keep siblings from seeing them via the shared /workspace
+	// mount — see .design/hub-shared-workspace-isolation.md). RemoveAll on the
+	// dir handles both layouts.
+	//
 	// In podman rootless mode, files created as root inside the container are
 	// owned by a mapped subuid on the host, making them inaccessible to the
 	// normal user. If standard removal fails, try `podman unshare rm -rf`
 	// which enters the user namespace where the mapped UIDs are accessible.
 	if externalAgentDir != "" {
 		if _, err := os.Stat(externalAgentDir); err == nil {
-			util.Debugf("delete: removing external agent home: %s", externalAgentDir)
+			util.Debugf("delete: removing external agent state dir: %s", externalAgentDir)
 			if err := util.RemoveAllSafe(externalAgentDir); err != nil {
 				util.Debugf("delete: standard removal failed, trying podman unshare: %v", err)
 				unshareCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -137,6 +143,42 @@ func DeleteAgentFiles(agentName string, grovePath string, removeBranch bool) (bo
 	}
 
 	return branchDeleted, nil
+}
+
+// migrateLegacyAgentState moves prompt.md and scion-agent.json from the
+// legacy in-grove location to the external (shared-workspace) location for
+// agents provisioned before per-agent state was relocated. The legacy
+// directory is removed if it ends up empty (it shouldn't contain anything
+// else for shared-workspace agents — there is no per-agent worktree).
+//
+// Best-effort: errors are logged but do not abort provisioning. A miss here
+// only means the in-grove copy lingers (still readable by siblings until the
+// agent re-provisions); it does not corrupt the new location.
+func migrateLegacyAgentState(legacyDir, externalDir string) {
+	moveFile := func(name string) {
+		legacyPath := filepath.Join(legacyDir, name)
+		if _, err := os.Stat(legacyPath); err != nil {
+			return
+		}
+		externalPath := filepath.Join(externalDir, name)
+		if _, err := os.Stat(externalPath); err == nil {
+			// External already populated — discard the in-grove residue.
+			_ = os.Remove(legacyPath)
+			return
+		}
+		if err := os.MkdirAll(externalDir, 0755); err != nil {
+			util.Debugf("migrateLegacyAgentState: mkdir %s: %v", externalDir, err)
+			return
+		}
+		if err := os.Rename(legacyPath, externalPath); err != nil {
+			util.Debugf("migrateLegacyAgentState: rename %s -> %s: %v", legacyPath, externalPath, err)
+		}
+	}
+	moveFile("prompt.md")
+	moveFile("scion-agent.json")
+	// Remove the legacy dir if empty (best effort; non-empty leftovers like a
+	// stale workspace/ shell are left in place to avoid surprising deletes).
+	_ = os.Remove(legacyDir)
 }
 
 // StopGroveContainers finds and removes containers belonging to the given grove
@@ -268,11 +310,26 @@ func ProvisionAgent(ctx context.Context, agentName string, templateName string, 
 			}
 		}
 	}
-	agentsDir := filepath.Join(projectDir, "agents")
-
-	agentDir := filepath.Join(agentsDir, agentName)
+	sharedWorkspace := api.IsSharedWorkspaceFromContext(ctx)
+	agentDir := config.GetAgentDir(projectDir, agentName, sharedWorkspace)
 	agentHome := config.GetAgentHomePath(projectDir, agentName)
-	agentWorkspace := filepath.Join(agentDir, "workspace")
+	// In worktree mode the workspace lives under agentDir so git's relative
+	// worktree pointers resolve correctly. In shared-workspace mode there is
+	// no per-agent workspace dir — the grove-wide checkout is mounted directly.
+	var agentWorkspace string
+	if !sharedWorkspace {
+		agentWorkspace = filepath.Join(agentDir, "workspace")
+	}
+
+	// Migrate any pre-existing in-grove state for shared-workspace agents to
+	// the external location so siblings stop seeing it via /workspace. This
+	// covers agents provisioned before the shared-workspace isolation change.
+	if sharedWorkspace {
+		legacyDir := filepath.Join(projectDir, "agents", agentName)
+		if legacyDir != agentDir {
+			migrateLegacyAgentState(legacyDir, agentDir)
+		}
+	}
 
 	if err := os.MkdirAll(agentDir, 0755); err != nil {
 		return "", "", nil, fmt.Errorf("failed to create agent directory: %w", err)
@@ -970,10 +1027,13 @@ func GetAgent(ctx context.Context, agentName string, templateName string, agentI
 	util.Debugf("GetAgent: agentName=%s templateName=%q harnessConfig=%q grovePath=%q projectDir=%s",
 		agentName, templateName, harnessConfig, grovePath, projectDir)
 
-	agentsDir := filepath.Join(projectDir, "agents")
-	agentDir := filepath.Join(agentsDir, agentName)
+	sharedWorkspace := api.IsSharedWorkspaceFromContext(ctx)
+	agentDir := config.GetAgentDir(projectDir, agentName, sharedWorkspace)
 	agentHome := config.GetAgentHomePath(projectDir, agentName)
-	agentWorkspace := filepath.Join(agentDir, "workspace")
+	var agentWorkspace string
+	if !sharedWorkspace {
+		agentWorkspace = filepath.Join(agentDir, "workspace")
+	}
 
 	// Check for stale/incomplete agent directory (dir exists but no config file).
 	// This can happen when a previous provisioning attempt created the directory
@@ -993,7 +1053,9 @@ func GetAgent(ctx context.Context, agentName string, templateName string, agentI
 	// If the managed workspace directory doesn't exist, try to recreate it.
 	// Only do this for existing, fully-provisioned agents (config file present).
 	// For new agents or stale directories, ProvisionAgent handles worktree creation.
-	if config.GetScionAgentConfigPath(agentDir) != "" {
+	// Skipped for shared-workspace agents (agentWorkspace == "") because they
+	// share the grove-wide checkout and have no per-agent worktree.
+	if agentWorkspace != "" && config.GetScionAgentConfigPath(agentDir) != "" {
 		if _, err := os.Stat(agentWorkspace); os.IsNotExist(err) {
 			if util.IsGitRepoDir(projectDir) {
 				// Recreate the worktree for git-backed workspaces.

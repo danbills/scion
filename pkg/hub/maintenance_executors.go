@@ -264,8 +264,9 @@ func (e *RebuildServerExecutor) Run(ctx context.Context, logger io.Writer, param
 	// destination (e.g., /usr/local/bin/scion). This avoids two problems:
 	//   1. ETXTBSY — writing directly to a running binary fails on Linux.
 	//   2. Permission denied — the service user typically cannot write to
-	//      /usr/local/bin/. A sudoers rule grants the narrow privilege to
-	//      install from this staging path to the binary destination.
+	//      /usr/local/bin/.
+	// Both the install and restart steps use sudo, backed by narrowly-scoped
+	// sudoers rules installed by the deploy script (gce-start-hub.sh).
 	stagingBinary := filepath.Join(repoPath, "scion.rebuild")
 
 	steps := []struct {
@@ -278,7 +279,6 @@ func (e *RebuildServerExecutor) Run(ctx context.Context, logger io.Writer, param
 		{"Building web assets", "make", []string{"web"}, repoPath},
 		{"Building server binary", "go", []string{"build", "-o", stagingBinary, "./cmd/scion"}, repoPath},
 		{"Installing server binary", "sudo", []string{"install", "-m", "755", stagingBinary, binaryDest}, ""},
-		{"Restarting service", "systemctl", []string{"restart", serviceName}, ""},
 	}
 
 	for i, step := range steps {
@@ -302,8 +302,24 @@ func (e *RebuildServerExecutor) Run(ctx context.Context, logger io.Writer, param
 		fmt.Fprintln(logger)
 	}
 
-	log.Info("Server rebuild and restart complete")
-	fmt.Fprintln(logger, "Server rebuild and restart complete.")
+	// Fire-and-forget: start the restart but don't wait for it to finish.
+	// "systemctl restart" sends SIGTERM to this very process, so cmd.Run()
+	// would never return — it reports "signal: terminated". Using cmd.Start()
+	// lets us return success so the calling goroutine can persist the
+	// completed run status to the DB before the process is killed.
+	fmt.Fprintf(logger, "==> Restarting service\n")
+	log.Debug("Initiating service restart (fire-and-forget)",
+		"cmd", "sudo", "args", fmt.Sprintf("[systemctl restart %s]", serviceName))
+	restartCmd := exec.Command("sudo", "systemctl", "restart", serviceName)
+	restartCmd.Stdout = logger
+	restartCmd.Stderr = logger
+	if err := restartCmd.Start(); err != nil {
+		log.Error("Failed to initiate service restart", "error", err)
+		return fmt.Errorf("restarting service failed: %w", err)
+	}
+
+	log.Info("Server rebuild complete, restart initiated")
+	fmt.Fprintln(logger, "\nServer rebuild complete, restart initiated.")
 	return nil
 }
 
@@ -352,6 +368,104 @@ func (e *RebuildWebExecutor) Run(ctx context.Context, logger io.Writer, params m
 	log.Info("Web frontend rebuild complete")
 	fmt.Fprintln(logger, "Web frontend rebuild complete. Changes take effect on the next page load.")
 	return nil
+}
+
+// UpdateCheckResult contains the result of a check-for-updates operation.
+type UpdateCheckResult struct {
+	UpdateAvailable bool               `json:"update_available"`
+	CurrentCommit   string             `json:"current_commit"`
+	LatestCommit    string             `json:"latest_commit"`
+	CommitsBehind   int                `json:"commits_behind"`
+	NewCommits      []UpdateCommitInfo `json:"new_commits,omitempty"`
+}
+
+// UpdateCommitInfo describes a single commit available in the remote.
+type UpdateCommitInfo struct {
+	Hash    string `json:"hash"`
+	Subject string `json:"subject"`
+}
+
+// CheckForUpdates fetches the remote and compares the local HEAD against
+// origin/main to determine whether a newer version is available.
+func CheckForUpdates(ctx context.Context, repoPath string) (*UpdateCheckResult, error) {
+	log := logging.Subsystem("hub.maintenance.check-updates")
+
+	if repoPath == "" {
+		return nil, fmt.Errorf("no repository path configured")
+	}
+
+	log.Debug("Checking for updates", "repo_path", repoPath)
+
+	// Fetch from origin.
+	fetchCmd := exec.CommandContext(ctx, "git", "fetch", "origin")
+	fetchCmd.Dir = repoPath
+	if out, err := fetchCmd.CombinedOutput(); err != nil {
+		log.Error("git fetch failed", "error", err, "output", string(out))
+		return nil, fmt.Errorf("git fetch failed: %w", err)
+	}
+
+	// Get local HEAD commit.
+	localCmd := exec.CommandContext(ctx, "git", "rev-parse", "HEAD")
+	localCmd.Dir = repoPath
+	localOut, err := localCmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get local HEAD: %w", err)
+	}
+	localCommit := strings.TrimSpace(string(localOut))
+
+	// Get remote HEAD commit (origin/main).
+	remoteCmd := exec.CommandContext(ctx, "git", "rev-parse", "origin/main")
+	remoteCmd.Dir = repoPath
+	remoteOut, err := remoteCmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get origin/main: %w", err)
+	}
+	remoteCommit := strings.TrimSpace(string(remoteOut))
+
+	result := &UpdateCheckResult{
+		CurrentCommit: localCommit,
+		LatestCommit:  remoteCommit,
+	}
+
+	if localCommit == remoteCommit {
+		return result, nil
+	}
+
+	result.UpdateAvailable = true
+
+	// Get list of new commits (local..remote).
+	logCmd := exec.CommandContext(ctx, "git", "log", "--oneline", "--no-decorate",
+		localCommit+".."+remoteCommit)
+	logCmd.Dir = repoPath
+	logOut, err := logCmd.Output()
+	if err != nil {
+		// Non-fatal: we know there's an update but can't list commits.
+		log.Warn("Failed to list new commits", "error", err)
+		return result, nil
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(logOut)), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, " ", 2)
+		info := UpdateCommitInfo{Hash: parts[0]}
+		if len(parts) > 1 {
+			info.Subject = parts[1]
+		}
+		result.NewCommits = append(result.NewCommits, info)
+	}
+	result.CommitsBehind = len(result.NewCommits)
+
+	log.Info("Update check complete",
+		"update_available", true,
+		"commits_behind", result.CommitsBehind,
+		"current", localCommit[:8],
+		"latest", remoteCommit[:8])
+
+	return result, nil
 }
 
 // parseMigrationParams extracts and validates migration-specific parameters from the request body.

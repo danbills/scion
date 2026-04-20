@@ -244,6 +244,16 @@ type GroveFilter struct {
 	// is in this set OR whose owner_id matches OwnerID. OwnerID and this
 	// field are combined with OR (not AND) when both are set.
 	MemberOrOwnerIDs []string
+
+	// MemberGroveIDs, when non-empty, restricts results to groves whose ID
+	// is in this set. Unlike MemberOrOwnerIDs, this is NOT combined with
+	// OwnerID — it filters strictly by grove ID membership.
+	MemberGroveIDs []string
+
+	// ExcludeOwnerID, when non-empty, excludes groves whose owner_id matches
+	// this value. Used with MemberGroveIDs to return "shared" groves (member
+	// but not owner).
+	ExcludeOwnerID string
 }
 
 // RuntimeBrokerStore defines runtime broker persistence operations.
@@ -1019,6 +1029,11 @@ type MaintenanceStore interface {
 
 	// ListMaintenanceRuns returns runs for a given operation key, ordered by started_at DESC.
 	ListMaintenanceRuns(ctx context.Context, operationKey string, limit int) ([]MaintenanceOperationRun, error)
+
+	// AbortRunningMaintenanceOps transitions any "running" operation runs and
+	// migrations to "failed". Called at server startup to clean up operations
+	// that were interrupted by a restart.
+	AbortRunningMaintenanceOps(ctx context.Context) (runs int64, migrations int64, err error)
 }
 
 // =============================================================================

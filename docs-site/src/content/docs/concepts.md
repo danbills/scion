@@ -75,6 +75,12 @@ The `offline` activity status occurs when an agent heartbeat has not been heard 
 
  Because an agent through its template can contain home folder content, env var definitions, and custom mounts that collectively exposes all configuration available to the harness (e.g., gemini-cli) scion-agents are not limited by the constraints of a harness' built-in sub-agent feature. While they are acting as sub-agents from the point-of-view of the Scion tool user-as-orchestrator, they are full agents in their capabilities.
 
+### Agent Ancestry & Identity Scoping
+
+To support multi-agent workflows, Scion implements **Agent Ancestry Chains**. When an agent spawns a child agent, the system tracks this relationship (`root` → `parent` → `child`). This ancestry chain is critical for **transitive access control**: any principal (user or agent) that exists in an agent's creation chain automatically gains access to manage that descendant agent. 
+
+Furthermore, agent identities are **strictly scoped by their grove** (e.g., `grove--agent`). This naming convention prevents name collisions across different workspaces and ensures agents can only interact with peers and progeny within their designated boundary. Progeny agents also receive granular secret access controls to prevent privilege escalation.
+
 ### Workspace Strategy
 
 Scion uses one of two strategies to give each agent an isolated git workspace, depending on whether a Hub is in use.
@@ -103,6 +109,7 @@ Scion enforces strict isolation between agents to prevent interference and cross
 - **Environment**: Environment variables are explicitly projected into the container.
 - **Credentials**: Sensitive credentials (like `gcloud` auth) are mounted read-only or injected via environment variables, ensuring they are available only to the specific agent.
 - **Externalized Grove Data**: Non-git grove data and agent home directories are externalized to ensure they cannot be traversed by agents in the workspace.
+- **Shared-Workspace Per-Agent Isolation**: In hub-hosted git groves where multiple agents share a single workspace mount, each agent's per-agent state (its task prompt and resolved configuration) is held outside that shared mount, so sibling agents in the same grove cannot read each other's state through the workspace view.
 
 ### Contextual Agent Instructions
 Scion automatically tailors an agent's operational context by appending supplemental instructions based on the workspace environment.

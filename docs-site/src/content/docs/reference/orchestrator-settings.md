@@ -107,7 +107,7 @@ runtimes:
 | `context` | string | (Kubernetes) The kubectl context name. |
 | `namespace` | string | (Kubernetes) The target namespace. |
 | `sync` | string | File sync strategy (e.g., `tar`). |
-| `gke` | bool | (Kubernetes) Enable GKE-specific features (e.g., Workload Identity). Default: `false`. |
+| `gke` | bool | (Kubernetes) Enable GKE-specific features (e.g., Workload Identity, Autopilot scheduling). Default: `false`. |
 | `env` | map | Environment variables to set for the runtime. |
 
 :::note

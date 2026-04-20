@@ -7,14 +7,22 @@ Scion supports Personal Access Tokens (PATs) for programmatic access to the Hub 
 
 ## Overview
 
-A Personal Access Token is a long-lived credential linked to your user account. It inherits all your permissions, allowing scripts, CI/CD pipelines, or remote tools to interact with the Scion Hub on your behalf.
+A Personal Access Token is a long-lived credential linked to your user account. It inherits all your permissions, allowing scripts, CI/CD pipelines, or remote tools to interact with the Scion Hub on your behalf. 
+
+**Note on Legacy Keys:** The legacy `sk_live_*` API keys have been completely removed. All users must migrate to the new `scion_pat_*` tokens.
+
+## Scoping and Permissions
+
+Personal Access Tokens support granular scoping. When creating a token, you can:
+- Restrict the token to specific actions (e.g., read-only, agent creation).
+- Limit the token's scope to specific groves rather than global access.
 
 ## Creating a Personal Access Token
 
 You can generate a new PAT using the Scion CLI:
 
 ```bash
-scion hub token create "My CI/CD Token"
+scion auth tokens create "My CI/CD Token"
 ```
 
 This will output the token value. **Store this token securely.** It is only displayed once and cannot be retrieved later.
@@ -36,7 +44,7 @@ It is crucial to understand the distinction between how users authenticate with 
 
 ### `SCION_HUB_TOKEN` (User Level)
 - **Purpose**: Authenticates a human user or a CI/CD pipeline.
-- **Scope**: Grants full access based on the user's permissions.
+- **Scope**: Grants access based on the user's permissions and the specific scopes assigned to the token.
 - **Usage**: Used by the Scion CLI or external scripts calling the Hub API.
 
 ### `SCION_AUTH_TOKEN` (Agent Level)
@@ -52,14 +60,20 @@ Injecting a user PAT into an agent means the agent will operate with your full u
 
 ## Managing Tokens
 
+Tokens can be managed either via the CLI or the Web UI.
+
+### Using the Web UI
+The easiest way to administer your tokens is through the **Web UI management interface** available in your user profile. This interface allows you to create, view, and revoke tokens visually, as well as configure specific action permissions and grove-level scopes.
+
+### Using the CLI
 If a token is compromised or no longer needed, you can revoke it:
 
 ```bash
-scion hub token revoke <token-id>
+scion auth tokens revoke <token-id>
 ```
 
 You can list all your active tokens using:
 
 ```bash
-scion hub token list
+scion auth tokens list
 ```

@@ -141,6 +141,19 @@ func (a *AuthzService) checkAccessForUser(ctx context.Context, user UserIdentity
 		}
 	}
 
+	// 2.6. Grove owner/admin bypass: any user with role=owner or role=admin
+	// in the grove's members group has the same access as the grove's
+	// creator-owner. This applies to the grove resource itself and to all
+	// resources scoped to the grove (agents, members group, etc.).
+	if groveID := groveIDForResource(resource); groveID != "" {
+		if a.isGroveOwnerOrAdmin(ctx, user.ID(), groveID) {
+			return Decision{
+				Allowed: true,
+				Reason:  "grove owner/admin",
+			}
+		}
+	}
+
 	// 3. Build principal refs: direct user + effective groups
 	principals := []store.PrincipalRef{
 		{Type: "user", ID: user.ID()},
@@ -426,6 +439,46 @@ func (a *AuthzService) enforceUATConstraints(scoped *ScopedUserIdentity, resourc
 func canAccessAsAncestor(principalID string, resource Resource) bool {
 	for _, id := range resource.Ancestry {
 		if id == principalID {
+			return true
+		}
+	}
+	return false
+}
+
+// groveIDForResource returns the grove ID a resource belongs to, or "" if the
+// resource is not grove-scoped. A grove resource maps to its own ID; any
+// resource with ParentType="grove" maps to its ParentID.
+func groveIDForResource(r Resource) string {
+	if r.Type == "grove" {
+		return r.ID
+	}
+	if r.ParentType == "grove" {
+		return r.ParentID
+	}
+	return ""
+}
+
+// isGroveOwnerOrAdmin reports whether the user is recorded with role=owner
+// or role=admin in any explicit group that belongs to the grove (typically
+// the "grove:<slug>:members" group). These users get the same access as the
+// grove's creator-owner.
+func (a *AuthzService) isGroveOwnerOrAdmin(ctx context.Context, userID, groveID string) bool {
+	if userID == "" || groveID == "" {
+		return false
+	}
+	groups, err := a.store.ListGroups(ctx, store.GroupFilter{
+		GroveID:   groveID,
+		GroupType: store.GroupTypeExplicit,
+	}, store.ListOptions{Limit: 10})
+	if err != nil || len(groups.Items) == 0 {
+		return false
+	}
+	for _, g := range groups.Items {
+		membership, err := a.store.GetGroupMembership(ctx, g.ID, store.GroupMemberTypeUser, userID)
+		if err != nil {
+			continue
+		}
+		if membership.Role == store.GroupMemberRoleOwner || membership.Role == store.GroupMemberRoleAdmin {
 			return true
 		}
 	}

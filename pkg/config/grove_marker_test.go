@@ -394,6 +394,93 @@ func TestGetAgentHomePath_NoGroveID(t *testing.T) {
 	}
 }
 
+func TestGetAgentDir_SharedWorkspaceUsesExternal(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	// Git grove with grove-id (split storage)
+	projectDir := filepath.Join(t.TempDir(), "my-repo", ".scion")
+	os.MkdirAll(projectDir, 0755)
+	WriteGroveID(projectDir, "550e8400-e29b-41d4-a716-446655440000")
+
+	got := GetAgentDir(projectDir, "test-agent", true)
+	want := filepath.Join(tmpHome, ".scion", "grove-configs", "my-repo__550e8400", ".scion", "agents", "test-agent")
+	if got != want {
+		t.Errorf("GetAgentDir(sharedWorkspace=true) = %q, want %q", got, want)
+	}
+}
+
+func TestGetAgentDir_WorktreeModeStaysInGrove(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	// Git grove with grove-id (split storage), but caller is NOT shared-workspace
+	projectDir := filepath.Join(t.TempDir(), "my-repo", ".scion")
+	os.MkdirAll(projectDir, 0755)
+	WriteGroveID(projectDir, "550e8400-e29b-41d4-a716-446655440000")
+
+	got := GetAgentDir(projectDir, "test-agent", false)
+	want := filepath.Join(projectDir, "agents", "test-agent")
+	if got != want {
+		t.Errorf("GetAgentDir(sharedWorkspace=false) = %q, want %q", got, want)
+	}
+}
+
+func TestGetAgentDir_SharedWorkspaceWithoutGroveIDFallsBack(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	// .scion dir without grove-id — split storage not initialized
+	projectDir := filepath.Join(t.TempDir(), "my-repo", ".scion")
+	os.MkdirAll(projectDir, 0755)
+
+	got := GetAgentDir(projectDir, "test-agent", true)
+	want := filepath.Join(projectDir, "agents", "test-agent")
+	if got != want {
+		t.Errorf("GetAgentDir(sharedWorkspace=true, no grove-id) = %q, want %q", got, want)
+	}
+}
+
+func TestResolveAgentDir_PrefersExternalWhenScionAgentJSONExists(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	projectDir := filepath.Join(t.TempDir(), "my-repo", ".scion")
+	os.MkdirAll(projectDir, 0755)
+	WriteGroveID(projectDir, "550e8400-e29b-41d4-a716-446655440000")
+
+	// Populate the external dir with a scion-agent.json (shared-workspace layout)
+	extAgentDir := filepath.Join(tmpHome, ".scion", "grove-configs", "my-repo__550e8400", ".scion", "agents", "test-agent")
+	if err := os.MkdirAll(extAgentDir, 0755); err != nil {
+		t.Fatalf("mkdir external agent dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(extAgentDir, "scion-agent.json"), []byte("{}"), 0644); err != nil {
+		t.Fatalf("write scion-agent.json: %v", err)
+	}
+
+	got := ResolveAgentDir(projectDir, "test-agent")
+	if got != extAgentDir {
+		t.Errorf("ResolveAgentDir() = %q, want %q", got, extAgentDir)
+	}
+}
+
+func TestResolveAgentDir_FallsBackToInGroveWhenExternalAbsent(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	projectDir := filepath.Join(t.TempDir(), "my-repo", ".scion")
+	os.MkdirAll(projectDir, 0755)
+	WriteGroveID(projectDir, "550e8400-e29b-41d4-a716-446655440000")
+
+	// Worktree-mode layout: scion-agent.json lives in-grove, only home/ is external.
+	// (We do not create the external scion-agent.json.)
+	got := ResolveAgentDir(projectDir, "test-agent")
+	want := filepath.Join(projectDir, "agents", "test-agent")
+	if got != want {
+		t.Errorf("ResolveAgentDir() = %q, want %q", got, want)
+	}
+}
+
 func TestIsHubContext(t *testing.T) {
 	// Clear all hub env vars
 	t.Setenv("SCION_HUB_ENDPOINT", "")

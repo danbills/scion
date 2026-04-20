@@ -71,10 +71,10 @@ export class ScionPageGroves extends LitElement {
   private viewMode: ViewMode = 'grid';
 
   /**
-   * Whether to show only groves owned by the current user
+   * Filter scope: 'all' (no filter), 'mine' (owner), 'shared' (member/admin)
    */
   @state()
-  private showMineOnly = false;
+  private groveScope: 'all' | 'mine' | 'shared' = 'all';
 
   static override styles = [
     listPageStyles,
@@ -107,12 +107,44 @@ export class ScionPageGroves extends LitElement {
         font-weight: 600;
       }
 
-      .filter-toggle {
+      .scope-toggle {
         display: inline-flex;
+        border: 1px solid var(--scion-border, #e2e8f0);
+        border-radius: var(--scion-radius, 0.5rem);
+        overflow: hidden;
       }
 
-      .filter-toggle sl-button::part(base) {
+      .scope-toggle button {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+        height: 2rem;
+        border: none;
+        background: var(--scion-surface, #ffffff);
+        color: var(--scion-text-muted, #64748b);
+        cursor: pointer;
+        padding: 0 0.625rem;
         font-size: 0.8125rem;
+        font-family: inherit;
+        transition: all 150ms ease;
+        white-space: nowrap;
+      }
+
+      .scope-toggle button:not(:last-child) {
+        border-right: 1px solid var(--scion-border, #e2e8f0);
+      }
+
+      .scope-toggle button:hover:not(.active) {
+        background: var(--scion-bg-subtle, #f1f5f9);
+      }
+
+      .scope-toggle button.active {
+        background: var(--scion-primary, #3b82f6);
+        color: white;
+      }
+
+      .scope-toggle button sl-icon {
+        font-size: 0.875rem;
       }
 
     `,
@@ -129,9 +161,12 @@ export class ScionPageGroves extends LitElement {
       this.viewMode = stored;
     }
 
-    // Read persisted mine-only filter
-    if (this.pageData?.user && localStorage.getItem('scion-filter-mine-groves') === 'true') {
-      this.showMineOnly = true;
+    // Read persisted scope filter
+    if (this.pageData?.user) {
+      const scope = localStorage.getItem('scion-scope-groves');
+      if (scope === 'mine' || scope === 'shared') {
+        this.groveScope = scope;
+      }
     }
 
     // Set SSE scope to dashboard (grove summaries).
@@ -142,9 +177,9 @@ export class ScionPageGroves extends LitElement {
     // Use hydrated data from SSR if available, avoiding the initial fetch.
     // Only trust it when scope was previously null (initial SSR page load);
     // on client-side navigations the maps were just cleared by setScope above.
-    // Skip hydrated data when mine-only filter is active — SSR data is unfiltered.
+    // Skip hydrated data when a scope filter is active — SSR data is unfiltered.
     const hydratedGroves = stateManager.getGroves();
-    if (hydratedGroves.length > 0 && !this.showMineOnly) {
+    if (hydratedGroves.length > 0 && this.groveScope === 'all') {
       this.groves = hydratedGroves;
       this.scopeCapabilities = stateManager.getScopeCapabilities();
       this.loading = false;
@@ -176,10 +211,10 @@ export class ScionPageGroves extends LitElement {
     // Merge updated/created groves
     for (const grove of updatedGroves) {
       const existing = groveMap.get(grove.id);
-      // When "My Groves" filter is active, only update groves already in the
+      // When a scope filter is active, only update groves already in the
       // filtered list — don't add new groves that weren't in the REST response.
-      // The server-side filter is the source of truth for ownership.
-      if (!existing && this.showMineOnly) {
+      // The server-side filter is the source of truth for ownership/membership.
+      if (!existing && this.groveScope !== 'all') {
         continue;
       }
       const merged = { ...existing, ...grove } as Grove;
@@ -198,7 +233,9 @@ export class ScionPageGroves extends LitElement {
     this.error = null;
 
     try {
-      const url = this.showMineOnly ? '/api/v1/groves?mine=true' : '/api/v1/groves';
+      const url = this.groveScope !== 'all'
+        ? `/api/v1/groves?scope=${this.groveScope}`
+        : '/api/v1/groves';
       const response = await apiFetch(url);
 
       if (!response.ok) {
@@ -228,9 +265,14 @@ export class ScionPageGroves extends LitElement {
     this.viewMode = e.detail.view;
   }
 
-  private toggleMineOnly(): void {
-    this.showMineOnly = !this.showMineOnly;
-    localStorage.setItem('scion-filter-mine-groves', String(this.showMineOnly));
+  private setScope(scope: 'all' | 'mine' | 'shared'): void {
+    if (this.groveScope === scope) return;
+    this.groveScope = scope;
+    if (scope === 'all') {
+      localStorage.removeItem('scion-scope-groves');
+    } else {
+      localStorage.setItem('scion-scope-groves', scope);
+    }
     void this.loadGroves();
   }
 
@@ -240,15 +282,28 @@ export class ScionPageGroves extends LitElement {
         <h1>Groves</h1>
         <div class="header-actions">
           ${this.pageData?.user ? html`
-            <div class="filter-toggle">
-              <sl-button
-                size="small"
-                variant=${this.showMineOnly ? 'primary' : 'default'}
-                @click=${this.toggleMineOnly}
+            <div class="scope-toggle">
+              <button
+                class=${this.groveScope === 'all' ? 'active' : ''}
+                title="All groves"
+                @click=${() => this.setScope('all')}
+              >All</button>
+              <button
+                class=${this.groveScope === 'mine' ? 'active' : ''}
+                title="Groves I own"
+                @click=${() => this.setScope('mine')}
               >
-                <sl-icon slot="prefix" name="person"></sl-icon>
-                My Groves
-              </sl-button>
+                <sl-icon name="person"></sl-icon>
+                Mine
+              </button>
+              <button
+                class=${this.groveScope === 'shared' ? 'active' : ''}
+                title="Groves shared with me"
+                @click=${() => this.setScope('shared')}
+              >
+                <sl-icon name="people"></sl-icon>
+                Shared
+              </button>
             </div>
           ` : nothing}
           <scion-view-toggle
@@ -297,12 +352,21 @@ export class ScionPageGroves extends LitElement {
 
   private renderGroves() {
     if (this.groves.length === 0) {
-      if (this.showMineOnly) {
+      if (this.groveScope === 'mine') {
         return html`
           <div class="empty-state">
             <sl-icon name="person"></sl-icon>
             <h2>No Groves Found</h2>
-            <p>You don't own or belong to any groves yet.</p>
+            <p>You don't own any groves yet.</p>
+          </div>
+        `;
+      }
+      if (this.groveScope === 'shared') {
+        return html`
+          <div class="empty-state">
+            <sl-icon name="people"></sl-icon>
+            <h2>No Shared Groves</h2>
+            <p>No groves have been shared with you yet.</p>
           </div>
         `;
       }

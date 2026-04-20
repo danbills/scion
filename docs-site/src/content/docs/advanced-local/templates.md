@@ -178,34 +178,41 @@ my-template/
 
 Skills from both the template and the harness-config are merged at provisioning time, so you can define common skills in the harness-config and role-specific skills in individual templates.
 
-## Template Sync (Hub Integration)
+### The `team-creation` Skill
 
-When connected to a Hub, you can synchronize grove-level templates between your local configuration and the Hub.
+Scion includes a specialized built-in skill called `team-creation`. This skill is designed for generating coordinated multi-agent template sets. It simplifies the creation of orchestrator-worker patterns by providing best-practice guidance for agent-to-agent communication and template structure, allowing an agent to quickly scaffold a team of specialized sub-agents.
 
-### Syncing Templates
+## Template Importing (Hub Integration)
 
-```bash
-# Sync all templates in the current grove to the Hub
-scion templates sync --all
+When connected to a Hub, you can import templates into your groves. This process is now a direct, high-performance server-side operation that provides immediate feedback, replacing the older container-based sync mechanism.
 
-# Check sync status of templates
-scion templates status
+### Direct Server-Side Import
+
+You can initiate a template import directly from the Web UI using the **Load Templates** button on the grove details page, or programmatically via the Hub API:
+
+```
+POST /api/v1/groves/{groveId}/import-templates
 ```
 
-The sync command updates existing templates on the Hub without requiring the `--force` flag. When running in co-located mode (hub-broker combo), template sync intelligently bypasses cache for faster iteration.
+*(Note: The legacy `sync-templates` endpoint has been removed.)*
+
+### Supported Sources and Deep Paths
+
+The import system supports a wide variety of sources, allowing you to pull templates from specific locations:
+
+- **Git Repositories:** Standard HTTPS clones are supported.
+- **Deep GitHub Paths:** You can import from specific subdirectories within a repository (e.g., `https://github.com/my-org/templates/tree/main/path/to/templates`). This relies on GitHub's tarball API via HTTPS for high reliability in restricted environments without requiring `svn` or `git` binaries.
+- **Archives:** Direct import from `.zip` or `.tar.gz` archive URLs.
+- **Rclone URIs:** Support for importing from cloud storage via rclone URIs (e.g., `:gcs:my-bucket/templates`).
+
+### Native Scion Templates
+
+The import process automatically detects and performs direct "copy" imports of native Scion templates (those containing a `scion-agent.yaml`), bypassing any conversion steps needed for generic templates.
 
 ### Automatic Sync on Hub Startup
 
-Local templates are automatically synchronized to the Hub during server startup. This ensures all defined templates are consistently available across distributed brokers without manual intervention.
+Local templates are automatically bootstrapped into the Hub during server startup. This ensures all defined templates are consistently available across distributed brokers without manual intervention.
 
-### Hub API
+### Web UI Management
 
-Templates can also be synced programmatically via the Hub API:
-
-```
-POST /api/v1/groves/{groveId}/sync-templates
-```
-
-### Externalized Settings for Git-Backed Groves
-
-When templates are synced for git-backed groves, machine-specific settings (paths, credentials) are externalized from the template, while the template definitions themselves remain in-repo to support version control.
+Once imported, templates can be directly managed via the Scion Web UI. The dashboard provides comprehensive **template file browsing, inline editing (with Markdown preview), and upload capabilities**, allowing you to refine agent roles and instructions without leaving the browser.

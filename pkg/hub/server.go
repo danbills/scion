@@ -256,7 +256,10 @@ type RuntimeBrokerClient interface {
 	// resolvedEnv contains environment variables resolved from Hub storage (API keys, etc.).
 	// harnessConfig is the harness config name to use for the agent (e.g. "claude", "gemini").
 	// resolvedSecrets contains type-aware secrets (including file-type) for auth resolution.
-	StartAgent(ctx context.Context, brokerID, brokerEndpoint, agentID, groveID, task, grovePath, groveSlug, harnessConfig string, resolvedEnv map[string]string, resolvedSecrets []ResolvedSecret, inlineConfig *api.ScionConfig, sharedDirs []api.SharedDir) (*RemoteAgentResponse, error)
+	// sharedWorkspace indicates the grove uses a shared workspace mount
+	// (hub-grove / git-workspace hybrid) so the broker must not create a
+	// per-agent worktree on (re-)start.
+	StartAgent(ctx context.Context, brokerID, brokerEndpoint, agentID, groveID, task, grovePath, groveSlug, harnessConfig string, resolvedEnv map[string]string, resolvedSecrets []ResolvedSecret, inlineConfig *api.ScionConfig, sharedDirs []api.SharedDir, sharedWorkspace bool) (*RemoteAgentResponse, error)
 
 	// StopAgent stops an agent on a remote runtime broker.
 	// brokerID is used for HMAC authentication lookup.
@@ -695,6 +698,15 @@ func New(cfg ServerConfig, s store.Store) (*Server, error) {
 	// on owner_id are satisfied when the dev user creates groves/groups.
 	if cfg.DevAuthToken != "" {
 		seedDevUser(ctx, s)
+	}
+
+	// Abort any maintenance operations/migrations left in "running" state from
+	// a previous server instance that was restarted mid-operation.
+	if runs, migrations, err := s.AbortRunningMaintenanceOps(ctx); err != nil {
+		slog.Warn("Failed to abort stalled maintenance operations", "error", err)
+	} else if runs > 0 || migrations > 0 {
+		slog.Info("Aborted stalled maintenance operations from previous run",
+			"runs", runs, "migrations", migrations)
 	}
 
 	// Build unified auth configuration
@@ -2024,6 +2036,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/admin/maintenance/operations", s.handleAdminMaintenanceOps)
 	s.mux.HandleFunc("/api/v1/admin/maintenance/operations/", s.handleAdminMaintenanceOps)
 	s.mux.HandleFunc("/api/v1/admin/maintenance/migrations/", s.handleAdminMaintenanceMigrations)
+	s.mux.HandleFunc("/api/v1/admin/maintenance/check-updates", s.handleCheckForUpdates)
 	s.mux.HandleFunc("/api/v1/admin/scheduler", s.handleAdminScheduler)
 	s.mux.HandleFunc("/api/v1/admin/server-config", s.handleAdminServerConfig)
 	s.mux.HandleFunc("/api/v1/admin/gcp-quota", s.handleAdminGCPQuota)

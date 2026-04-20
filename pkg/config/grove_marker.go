@@ -252,3 +252,47 @@ func GetAgentHomePath(projectDir, agentName string) string {
 	}
 	return filepath.Join(projectDir, "agents", agentName, "home")
 }
+
+// GetAgentDir returns the broker-side directory for an agent's per-agent state
+// files (prompt.md, scion-agent.json, and — in worktree mode — the workspace
+// subdir).
+//
+// For shared-workspace git groves (sharedWorkspace == true and a grove-id
+// marker exists), this returns the external path under
+// ~/.scion/grove-configs/<slug>__<uuid>/.scion/agents/<name>/ so that sibling
+// agents do not see each other's state via the shared /workspace mount. See
+// .design/hub-shared-workspace-isolation.md for the threat model.
+//
+// For all other modes (worktree mode, non-git groves, or shared-workspace
+// groves without an initialized grove-id), this returns the in-grove path
+// <projectDir>/agents/<name>/ — preserving the worktree-relative layout that
+// git's worktree pointers depend on.
+func GetAgentDir(projectDir, agentName string, sharedWorkspace bool) string {
+	if sharedWorkspace {
+		if externalDir, err := GetGitGroveExternalAgentsDir(projectDir); err == nil && externalDir != "" {
+			return filepath.Join(externalDir, agentName)
+		}
+	}
+	return filepath.Join(projectDir, "agents", agentName)
+}
+
+// ResolveAgentDir returns the broker-side per-agent state directory when the
+// shared-workspace mode is not known to the caller. It probes the external
+// path first (used by shared-workspace groves), then falls back to the
+// in-grove path. A read-time companion to GetAgentDir, used by code paths
+// that look up an existing agent by name without carrying the
+// sharedWorkspace flag through the call stack.
+//
+// Returns the external path only when a grove-id marker exists *and* the
+// external per-agent directory contains scion-agent.json (which never lives
+// external in worktree mode — only home/ does). Otherwise returns the
+// in-grove path.
+func ResolveAgentDir(projectDir, agentName string) string {
+	if externalDir, err := GetGitGroveExternalAgentsDir(projectDir); err == nil && externalDir != "" {
+		ext := filepath.Join(externalDir, agentName)
+		if _, err := os.Stat(filepath.Join(ext, "scion-agent.json")); err == nil {
+			return ext
+		}
+	}
+	return filepath.Join(projectDir, "agents", agentName)
+}

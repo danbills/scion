@@ -73,7 +73,10 @@ func (m *AgentManager) List(ctx context.Context, filter map[string]string) ([]ap
 	for i := range agents {
 		runningNames[agents[i].Name] = true
 		if agents[i].GrovePath != "" {
-			agentDir := filepath.Join(agents[i].GrovePath, "agents", agents[i].Name)
+			// ResolveAgentDir probes both worktree and shared-workspace
+			// layouts (see .design/hub-shared-workspace-isolation.md) since
+			// the runtime label set doesn't carry the workspace mode.
+			agentDir := config.ResolveAgentDir(agents[i].GrovePath, agents[i].Name)
 			scionJSON := filepath.Join(agentDir, "scion-agent.json")
 			agentHome := config.GetAgentHomePath(agents[i].GrovePath, agents[i].Name)
 			agentInfoJSON := filepath.Join(agentHome, "agent-info.json")
@@ -170,88 +173,99 @@ func (m *AgentManager) List(ctx context.Context, filter map[string]string) ([]ap
 	}
 
 	for _, gp := range grovesToScan {
-		agentsDir := filepath.Join(gp, "agents")
-		entries, err := os.ReadDir(agentsDir)
-		if err != nil {
-			continue
+		// Walk both the in-grove agents dir (worktree-mode agents) and the
+		// external split-storage agents dir (shared-workspace agents, whose
+		// state lives outside the grove tree per
+		// .design/hub-shared-workspace-isolation.md).
+		seenNames := make(map[string]bool)
+		dirsToScan := []string{filepath.Join(gp, "agents")}
+		if extDir, err := config.GetGitGroveExternalAgentsDir(gp); err == nil && extDir != "" {
+			dirsToScan = append(dirsToScan, extDir)
 		}
 		groveName := config.GetGroveName(gp)
-		for _, e := range entries {
-			if !e.IsDir() {
+		for _, agentsDir := range dirsToScan {
+			entries, err := os.ReadDir(agentsDir)
+			if err != nil {
 				continue
 			}
-			if runningNames[e.Name()] {
-				continue
-			}
-
-			// Check scion-agent.json and home/agent-info.json
-			agentDir := filepath.Join(agentsDir, e.Name())
-			agentScionJSON := filepath.Join(agentDir, "scion-agent.json")
-			agentHome := config.GetAgentHomePath(gp, e.Name())
-			agentInfoJSON := filepath.Join(agentHome, "agent-info.json")
-
-			var info *api.AgentInfo
-
-			// Try agent-info.json first
-			if data, err := os.ReadFile(agentInfoJSON); err == nil {
-				var ai api.AgentInfo
-				if err := json.Unmarshal(data, &ai); err == nil {
-					info = &ai
-				}
-			}
-
-			// Fallback to scion-agent.json if info is missing (legacy)
-			if info == nil {
-				if data, err := os.ReadFile(agentScionJSON); err == nil {
-					var cfg api.ScionConfig
-					if err := json.Unmarshal(data, &cfg); err == nil {
-						info = cfg.Info
-					}
-				}
-			}
-
-			// If we still have no info, check if scion-agent.json exists at all to confirm it's an agent
-			// but we can't report much.
-			if info == nil {
-				if _, err := os.Stat(agentScionJSON); err == nil {
-					// It's an agent directory but we can't read info.
-					// Maybe report minimal info?
-					info = &api.AgentInfo{
-						Name:  e.Name(),
-						Grove: groveName,
-						Phase: "unknown",
-					}
-				} else {
+			for _, e := range entries {
+				if !e.IsDir() {
 					continue
 				}
-			}
+				if runningNames[e.Name()] || seenNames[e.Name()] {
+					continue
+				}
+				seenNames[e.Name()] = true
 
-			agentEntry := api.AgentInfo{
-				Name:            e.Name(),
-				Template:        info.Template,
-				HarnessConfig:   info.HarnessConfig,
-				Grove:           groveName,
-				GrovePath:       gp,
-				ContainerStatus: "created",
-				Image:           info.Image,
-				Phase:           info.Phase,
-				Activity:        info.Activity,
-				Runtime:         info.Runtime,
-				Profile:         info.Profile,
-			}
+				// Check scion-agent.json and home/agent-info.json
+				agentDir := filepath.Join(agentsDir, e.Name())
+				agentScionJSON := filepath.Join(agentDir, "scion-agent.json")
+				agentHome := config.GetAgentHomePath(gp, e.Name())
+				agentInfoJSON := filepath.Join(agentHome, "agent-info.json")
 
-			// Use agent-info.json mtime as LastSeen for local agents
-			if fi, err := os.Stat(agentInfoJSON); err == nil {
-				agentEntry.LastSeen = fi.ModTime()
-			}
+				var info *api.AgentInfo
 
-			// Warn about stale soft-deleted agents
-			if !info.DeletedAt.IsZero() {
-				agentEntry.Warnings = append(agentEntry.Warnings,
-					fmt.Sprintf("soft-deleted at %s", info.DeletedAt.Format("2006-01-02 15:04")))
-			}
+				// Try agent-info.json first
+				if data, err := os.ReadFile(agentInfoJSON); err == nil {
+					var ai api.AgentInfo
+					if err := json.Unmarshal(data, &ai); err == nil {
+						info = &ai
+					}
+				}
 
-			agents = append(agents, agentEntry)
+				// Fallback to scion-agent.json if info is missing (legacy)
+				if info == nil {
+					if data, err := os.ReadFile(agentScionJSON); err == nil {
+						var cfg api.ScionConfig
+						if err := json.Unmarshal(data, &cfg); err == nil {
+							info = cfg.Info
+						}
+					}
+				}
+
+				// If we still have no info, check if scion-agent.json exists at all to confirm it's an agent
+				// but we can't report much.
+				if info == nil {
+					if _, err := os.Stat(agentScionJSON); err == nil {
+						// It's an agent directory but we can't read info.
+						// Maybe report minimal info?
+						info = &api.AgentInfo{
+							Name:  e.Name(),
+							Grove: groveName,
+							Phase: "unknown",
+						}
+					} else {
+						continue
+					}
+				}
+
+				agentEntry := api.AgentInfo{
+					Name:            e.Name(),
+					Template:        info.Template,
+					HarnessConfig:   info.HarnessConfig,
+					Grove:           groveName,
+					GrovePath:       gp,
+					ContainerStatus: "created",
+					Image:           info.Image,
+					Phase:           info.Phase,
+					Activity:        info.Activity,
+					Runtime:         info.Runtime,
+					Profile:         info.Profile,
+				}
+
+				// Use agent-info.json mtime as LastSeen for local agents
+				if fi, err := os.Stat(agentInfoJSON); err == nil {
+					agentEntry.LastSeen = fi.ModTime()
+				}
+
+				// Warn about stale soft-deleted agents
+				if !info.DeletedAt.IsZero() {
+					agentEntry.Warnings = append(agentEntry.Warnings,
+						fmt.Sprintf("soft-deleted at %s", info.DeletedAt.Format("2006-01-02 15:04")))
+				}
+
+				agents = append(agents, agentEntry)
+			}
 		}
 	}
 

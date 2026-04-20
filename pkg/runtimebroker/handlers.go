@@ -940,6 +940,10 @@ func (s *Server) startAgent(w http.ResponseWriter, r *http.Request, id, groveID 
 		ResolvedSecrets []api.ResolvedSecret `json:"resolvedSecrets,omitempty"`
 		InlineConfig    *api.ScionConfig     `json:"inlineConfig,omitempty"`
 		SharedDirs      []api.SharedDir      `json:"sharedDirs,omitempty"`
+		// SharedWorkspace must be re-sent on every start: hub-grove agents
+		// share a single git checkout instead of being given a worktree, and
+		// without this flag the broker would create a worktree on restart.
+		SharedWorkspace bool `json:"sharedWorkspace,omitempty"`
 	}
 	if r.Body != nil && r.ContentLength != 0 {
 		if err := json.NewDecoder(r.Body).Decode(&startReq); err != nil {
@@ -951,11 +955,12 @@ func (s *Server) startAgent(w http.ResponseWriter, r *http.Request, id, groveID 
 
 	// Build config for buildStartContext (startAgent uses a subset of CreateAgentConfig)
 	var cfg *CreateAgentConfig
-	if startReq.Task != "" || startReq.HarnessConfig != "" || len(startReq.SharedDirs) > 0 {
+	if startReq.Task != "" || startReq.HarnessConfig != "" || len(startReq.SharedDirs) > 0 || startReq.SharedWorkspace {
 		cfg = &CreateAgentConfig{
-			Task:          startReq.Task,
-			HarnessConfig: startReq.HarnessConfig,
-			SharedDirs:    startReq.SharedDirs,
+			Task:            startReq.Task,
+			HarnessConfig:   startReq.HarnessConfig,
+			SharedDirs:      startReq.SharedDirs,
+			SharedWorkspace: startReq.SharedWorkspace,
 		}
 	}
 
@@ -994,7 +999,7 @@ func (s *Server) startAgent(w http.ResponseWriter, r *http.Request, id, groveID 
 
 	// Apply updated InlineConfig to scion-agent.json before starting.
 	if startReq.InlineConfig != nil && opts.GrovePath != "" {
-		s.applyInlineConfigUpdate(id, opts.GrovePath, startReq.InlineConfig)
+		s.applyInlineConfigUpdate(id, opts.GrovePath, startReq.InlineConfig, startReq.SharedWorkspace)
 	}
 
 	// Resolve saved profile for runtime selection
@@ -1031,13 +1036,17 @@ func (s *Server) startAgent(w http.ResponseWriter, r *http.Request, id, groveID 
 // applyInlineConfigUpdate merges the updated InlineConfig into the agent's
 // scion-agent.json. This ensures config changes made via the Hub (e.g. limits
 // set in the web configure form) are applied before the agent starts.
-func (s *Server) applyInlineConfigUpdate(agentName, grovePath string, inlineConfig *api.ScionConfig) {
+//
+// sharedWorkspace branches the path: shared-workspace agents store
+// scion-agent.json externally (~/.scion/grove-configs/<slug>__<uuid>/.scion/
+// agents/<name>/) so siblings cannot read it via /workspace.
+func (s *Server) applyInlineConfigUpdate(agentName, grovePath string, inlineConfig *api.ScionConfig, sharedWorkspace bool) {
 	projectDir, err := config.GetResolvedProjectDir(grovePath)
 	if err != nil {
 		s.agentLifecycleLog.Warn("applyInlineConfigUpdate: failed to resolve project dir", "agent", agentName, "error", err)
 		return
 	}
-	agentDir := filepath.Join(projectDir, "agents", agentName)
+	agentDir := config.GetAgentDir(projectDir, agentName, sharedWorkspace)
 	cfgPath := filepath.Join(agentDir, "scion-agent.json")
 
 	// Load existing config
@@ -1341,7 +1350,7 @@ func (s *Server) getLogs(w http.ResponseWriter, r *http.Request, id, groveID str
 			agentSlug = found.Name
 		}
 		agentLogPath := filepath.Join(config.GetAgentHomePath(
-			filepath.Join(found.GrovePath, ".scion"), agentSlug,
+			found.GrovePath, agentSlug,
 		), "agent.log")
 		if data, err := os.ReadFile(agentLogPath); err == nil {
 			w.Header().Set("Content-Type", "text/plain")
@@ -1412,9 +1421,14 @@ func (s *Server) checkAgentPrompt(w http.ResponseWriter, r *http.Request, id, gr
 		return
 	}
 
-	// Check if prompt.md exists and has content
-	// Path: <grovePath>/agents/<agentName>/prompt.md
-	promptPath := filepath.Join(agent.GrovePath, "agents", agent.Name, "prompt.md")
+	// Check if prompt.md exists and has content. The mode (worktree vs
+	// shared-workspace) isn't carried on the request, so probe both
+	// locations via ResolveAgentDir.
+	projectDir, _ := config.GetResolvedProjectDir(agent.GrovePath)
+	if projectDir == "" {
+		projectDir = agent.GrovePath
+	}
+	promptPath := filepath.Join(config.ResolveAgentDir(projectDir, agent.Name), "prompt.md")
 	content, err := os.ReadFile(promptPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -2215,6 +2229,10 @@ func (s *Server) deleteGrove(w http.ResponseWriter, r *http.Request, slug string
 // name. Returns the .scion project dir path if found, or empty string.
 // This is used as a fallback when the container is missing and the agent's
 // grove path can't be determined from container labels.
+//
+// Probes both the in-grove location (worktree-mode agents) and the external
+// per-agent state dir under ~/.scion/grove-configs/ (shared-workspace agents,
+// whose state lives external to the shared checkout).
 func findAgentInHubNativeGroves(agentName string) string {
 	globalDir, err := config.GetGlobalDir()
 	if err != nil {
@@ -2233,6 +2251,13 @@ func findAgentInHubNativeGroves(agentName string) string {
 		agentDir := filepath.Join(scionDir, "agents", agentName)
 		if _, err := os.Stat(agentDir); err == nil {
 			return scionDir
+		}
+		// Shared-workspace agents have no in-grove agentDir — probe the
+		// external split-storage path.
+		if extDir, err := config.GetGitGroveExternalAgentsDir(scionDir); err == nil && extDir != "" {
+			if _, err := os.Stat(filepath.Join(extDir, agentName)); err == nil {
+				return scionDir
+			}
 		}
 	}
 	return ""

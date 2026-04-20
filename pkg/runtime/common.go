@@ -190,6 +190,18 @@ func buildCommonRunArgs(config RunConfig) ([]string, error) {
 		} else if relWorkspace == "." {
 			// Shared workspace: workspace IS the repo root (e.g., shared git clone).
 			// Mount directly to /workspace so harnesses can trust a single path.
+			//
+			// Sibling agents share this exact mount, so per-agent state must not
+			// live under <workspace>/.scion/agents/ on the broker — that path
+			// would be visible to every container in the grove. Provisioning
+			// relocates prompt.md and scion-agent.json to
+			// ~/.scion/grove-configs/<slug>__<uuid>/.scion/agents/<name>/
+			// (config.GetAgentDir with sharedWorkspace=true), so there is
+			// nothing to leak through this mount. See
+			// .design/hub-shared-workspace-isolation.md (defense by absence).
+			// If the threat model ever requires in-container shadowing, mirror
+			// the /repo-root/.scion tmpfs pattern below at
+			// /workspace/.scion/agents.
 			registerMount(config.Workspace, "/workspace", false, true)
 			addArg("--workdir", "/workspace")
 		} else {
@@ -402,6 +414,22 @@ func buildCommonRunArgs(config RunConfig) ([]string, error) {
 	}
 
 	return args, nil
+}
+
+// resolveContainerID maps an agent identifier (slug, name, or partial
+// container ID) to the authoritative container ID used by the runtime.
+// When no match is found the original id is returned so callers can fall
+// back to the raw value (which may itself be a valid container name).
+func resolveContainerID(agents []api.AgentInfo, id string) string {
+	for _, a := range agents {
+		if a.ContainerID == id ||
+			(len(id) >= 12 && strings.HasPrefix(a.ContainerID, id)) ||
+			(len(a.ContainerID) >= 12 && strings.HasPrefix(id, a.ContainerID)) ||
+			a.Name == id || a.Name == "/"+id || strings.TrimPrefix(a.Name, "/") == id {
+			return a.ContainerID
+		}
+	}
+	return id
 }
 
 // runtimeLog is the structured logger for runtime command execution.

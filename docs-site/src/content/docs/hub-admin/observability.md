@@ -377,6 +377,10 @@ The Hub includes an automated monitoring system to detect "zombie" or stalled ag
 - **Notifications**: Stalled events can trigger automated browser push notifications (by default, `stalled` and `error` states are included in the default notification triggers), proactively alerting administrators to health issues.
 - **Visibility**: The Web UI clearly flags offline agents with specialized status badges, ensuring they are not lost among active workloads.
 
+## Server Maintenance Logs
+
+Server maintenance operations (like `rebuild-server`, `rebuild-web`, and `pull-images`) emit structured execution logs that are captured in real-time. These logs are accessible via the Web Dashboard's Maintenance Panel, providing immediate visibility into the progress of updates and synchronization tasks. In addition to real-time streaming, historical logs for completed maintenance tasks are archived and associated with their respective run records, allowing administrators to review past operations for duration, completion status, and potential failure points.
+
 ## Troubleshooting for Admins
 
 ### Logs Not Appearing in GCP

@@ -75,9 +75,9 @@ export class ScionAgentMessageViewer extends LitElement {
 
   /**
    * Whether Cloud Logging is available for this agent. When false, the
-   * viewer skips Cloud-Logging-only paths: the fallback fetch from
-   * /message-logs and the SSE stream from /message-logs/stream. The hub
-   * message store path still works and is the primary source regardless.
+   * viewer skips the Cloud-Logging-only fallback fetch from
+   * /message-logs. The hub message store path and the hub-store-backed
+   * SSE stream (/messages/stream) work regardless of this setting.
    */
   @property({ type: Boolean })
   cloudLogging = false;
@@ -393,8 +393,12 @@ export class ScionAgentMessageViewer extends LitElement {
 
   private get resolvedStreamUrl(): string {
     if (this.streamUrl) return this.streamUrl;
-    if (this.agentId) return `/api/v1/agents/${this.agentId}/message-logs/stream`;
-    return '';
+    if (!this.agentId) return '';
+    // Prefer the hub-store-backed per-agent stream, which works on any
+    // deployment regardless of Cloud Logging. The older
+    // /message-logs/stream endpoint is Cloud Logging only and is kept
+    // as a fallback for deployments that explicitly enable that.
+    return `/api/v1/agents/${this.agentId}/messages/stream`;
   }
 
   private async fetchMessages(): Promise<void> {
@@ -572,6 +576,19 @@ export class ScionAgentMessageViewer extends LitElement {
 
     this.eventSource = new EventSource(url);
 
+    // Hub-store-backed stream: emits "message" events with a full
+    // UserMessageEvent payload (hub store record) per message.
+    this.eventSource.addEventListener('message', (event: Event) => {
+      try {
+        const msg = JSON.parse((event as MessageEvent).data) as Message;
+        this.mergeHubMessages([msg]);
+      } catch {
+        // Skip unparseable entries
+      }
+    });
+
+    // Cloud-Logging-backed stream (fallback path via /message-logs/stream
+    // when explicitly opted in): emits "log" events with raw log entries.
     this.eventSource.addEventListener('log', (event: Event) => {
       try {
         const entry = JSON.parse((event as MessageEvent).data) as MessageLogEntry;
@@ -583,6 +600,7 @@ export class ScionAgentMessageViewer extends LitElement {
 
     this.eventSource.addEventListener('timeout', () => {
       this.stopStream();
+      void this.fetchMessages(); // backfill anything dropped during the prior window
       this.startStream();
     });
 
@@ -761,11 +779,6 @@ export class ScionAgentMessageViewer extends LitElement {
   }
 
   private renderToolbar() {
-    // The Stream toggle subscribes to /message-logs/stream, which is a
-    // Cloud-Logging-only endpoint. Only show it when Cloud Logging (or a
-    // custom streamUrl override) is available, otherwise the toggle would
-    // silently fail for non-CL deployments.
-    const streamAvailable = this.cloudLogging || this.streamUrl !== '';
     return html`
       <div class="toolbar">
         ${this.streaming
@@ -781,7 +794,7 @@ export class ScionAgentMessageViewer extends LitElement {
           <sl-icon slot="prefix" name="arrow-clockwise"></sl-icon>
           Refresh
         </sl-button>
-        ${streamAvailable
+        ${this.resolvedStreamUrl
           ? html`
               <span class="toolbar-label">Stream</span>
               <sl-switch

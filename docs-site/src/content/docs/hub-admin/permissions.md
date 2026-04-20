@@ -87,7 +87,18 @@ The permissions system features:
 - **Identity Resolution**: Core identity and domain-based authorization.
 - **Capability Gating**: UI and API enforcement via `_capabilities`.
 - **Policy Enforcement**: Strict authorization for agent creation, interaction, and deletion based on grove membership and ownership.
+- **Agent Identity & Ancestry**: Strict scoping of agent names, ancestry chains, and transitive access control.
 - **Group & Policy Management**: Full support for group and policy schemas in the database, manageable via the Web Dashboard.
+
+## Agent Ancestry & Transitive Access
+
+Scion enforces a robust security model for agent-to-agent interactions (progeny) through **Ancestry Chains** and **Transitive Access Control**.
+
+When an agent creates a child agent (for example, to delegate a sub-task), the system records an ancestry chain (`root` → `parent` → `child`). This chain is used to enforce strict identity scoping and transitive access permissions.
+
+- **Transitive Access**: Any principal (human user or agent) that exists in an agent's creation chain automatically gains access to manage that agent. If a user owns the root agent, they inherently have access to all of its descendants.
+- **Strict Scoping**: Agent identities are strictly scoped by their grove using a specific naming convention (e.g., `grove--agent`). This prevents name collisions across different workspaces and ensures that progeny agents cannot impersonate or interfere with agents in other groves.
+- **Granular Secret Access**: Progeny agents inherit granular secret access controls from their parents, ensuring they only have the credentials necessary to perform their specific tasks.
 
 ## Managing Users and Groups
 

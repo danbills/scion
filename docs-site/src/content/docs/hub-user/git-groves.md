@@ -3,7 +3,7 @@ title: "Tutorial: Git-Based Groves"
 description: Set up a GitHub repository as a Hub-managed grove and dispatch agents to work on it remotely.
 ---
 
-**What you will learn**: How to create a grove from a GitHub repository, configure authentication with a fine-grained Personal Access Token, and start agents that clone and work on your code — all without a local checkout.
+**What you will learn**: How to create a grove from a GitHub repository, configure authentication with a GitHub App or Personal Access Token, and start agents that clone and work on your code — all without a local checkout.
 
 ## Local Worktrees vs. Hub Clones
 
@@ -12,7 +12,7 @@ Before diving in, it's important to understand the two workspace models Scion of
 | | Local Worktrees | Hub Clones (Git Groves) |
 | :--- | :--- | :--- |
 | **Where code lives** | On your machine, as a git worktree | Inside the agent container, cloned at startup |
-| **Git credentials** | Uses your local git/SSH config | Requires a `GITHUB_TOKEN` secret on the Hub |
+| **Git credentials** | Uses your local git/SSH config | Requires a GitHub App or `GITHUB_TOKEN` secret on the Hub |
 | **Isolation** | Worktree per agent, shared `.git` | Full clone per agent, completely independent |
 | **Network** | No network needed (local files) | HTTPS clone from GitHub on each start |
 | **Merging work** | Merge worktree branches locally | Agent pushes to remote; merge via Pull Request |
@@ -33,7 +33,18 @@ For the full technical details on workspace strategies, see [About Workspaces](/
 
 ---
 
-## Step 1: Create a GitHub Fine-Grained PAT
+## Step 1: Set Up Authentication
+
+Scion provides two ways to authenticate with GitHub for your groves:
+
+1. **GitHub App Integration (Recommended)**: An automated, secure way to provide agents with short-lived installation tokens. If your Hub Administrator has configured this, authentication is automatic.
+2. **Personal Access Tokens (PATs)**: Manual token management using a `GITHUB_TOKEN` secret. Use this if the GitHub App is not configured or for repositories outside its scope.
+
+### Option A: GitHub App Integration
+
+When creating a grove, Scion automatically associates it with the corresponding GitHub App installation. The system maintains a background refresh loop for installation tokens, and the `sciontool` credential helper provides fresh tokens to `git` on-demand inside the agent container. No manual setup is required.
+
+### Option B: Personal Access Tokens
 
 Scion uses a GitHub **fine-grained Personal Access Token (PAT)** to clone repositories over HTTPS inside agent containers. Fine-grained PATs are preferred over classic tokens because they can be scoped to specific repositories.
 
@@ -95,7 +106,23 @@ Creating a grove from the same git URL twice won't create a duplicate — the gr
 
 ---
 
-## Step 3: Upload Your Token as a Secret
+## Step 3: Configure Grove Settings, Templates & Limits
+
+Once your grove is created, you can configure its settings via the Web Dashboard. This allows you to manage templates, set resource limits, and configure runtime brokers.
+
+1. Navigate to the Web Dashboard and select your newly created grove.
+2. Configure templates by clicking the **Load Templates** button on the grove detail page. This initiates a direct, server-side import of templates from a specified Git repository URL, deep path, or archive. Once imported, you can use the web interface to browse and edit template files.
+3. Click the **Settings** gear icon to configure:
+   - **General**: Update the grove description or default branch.
+   - **Limits**: Set maximum concurrency, maximum execution duration, and workspace storage limits. These limits automatically prepopulate the agent creation form.
+   - **Resources**: Manage runtime brokers and message broker plugins available to agents in this grove.
+   - **Secrets**: Manage grove-scoped secrets, such as API keys and PATs.
+
+---
+
+## Step 4: Upload Your Token as a Secret (PAT only)
+
+If you are using the Personal Access Token method, store your PAT as a grove-scoped secret:
 
 Store the GitHub PAT as a grove-scoped secret so that all agents in this grove can authenticate:
 
@@ -125,7 +152,7 @@ You can also upload secrets through the Web Dashboard:
 
 ---
 
-## Step 4: Start an Agent
+## Step 5: Start an Agent
 
 With the grove and token in place, start an agent targeting the grove:
 
@@ -168,7 +195,7 @@ scion start agent-docs    --grove acme-backend "update the API documentation"
 
 ---
 
-## Step 5: Monitor and Retrieve Work
+## Step 6: Monitor and Retrieve Work
 
 ### Check agent status
 

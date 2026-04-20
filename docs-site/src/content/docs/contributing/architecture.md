@@ -322,7 +322,7 @@ The Hub exposes a RESTful API under `/api/v1/`:
 | **Runtime Brokers** | `GET/POST /runtime-brokers`, `GET/PUT/DELETE /runtime-brokers/{id}`, heartbeat, control channel |
 | **Templates** | `GET/POST /templates`, `GET/PUT/DELETE /templates/{id}` |
 | **Users** | `GET/POST /users`, `GET/PUT/DELETE /users/{id}` |
-| **Auth** | Login, token, refresh, validate, logout, CLI OAuth, API keys |
+| **Auth** | Login, token, refresh, validate, logout, CLI OAuth, PATs |
 | **Env Vars / Secrets** | CRUD for scoped environment variables and encrypted secrets |
 | **Groups / Policies** | RBAC: groups with nested membership, policies with conditional bindings |
 
@@ -336,7 +336,7 @@ The Hub supports multiple authentication methods:
 | **Dev Auth** | Development shortcut using a static token |
 | **JWT (User)** | Issued after login; used for API calls |
 | **JWT (Agent)** | Scoped tokens issued to agents for Hub API access from within containers |
-| **API Keys** | Programmatic access with `sk_live_` prefixed keys |
+| **PAT** | Programmatic access with `scion_pat_` prefixed tokens |
 | **HMAC** | Runtime Broker authentication using shared secrets |
 
 ### Persistence (Store)
@@ -534,7 +534,7 @@ security error: '<path>/agents/' must be in .gitignore when using a project-loca
 User -> Hub API: OAuth/DevAuth -> JWT (User Token)
 Agent -> Hub API: JWT (Agent Token, scoped)
 Broker -> Hub API: HMAC-SHA256 Signed Request
-CLI -> Hub API: API Key (sk_live_...)
+CLI -> Hub API: PAT (scion_pat_...)
 ```
 
 ---

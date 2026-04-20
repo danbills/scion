@@ -7,9 +7,13 @@ Scion supports running agents as Pods in a Kubernetes cluster. This enables remo
 ## Prerequisites
 
 - A running Kubernetes cluster (GKE, EKS, AKS, or self-managed).
-- `kubectl` configured with access to the target cluster.
+- Kubeconfig file configured with access to the target cluster (or running within the cluster using In-Cluster Authentication).
 - Scion agent images available to the cluster (pushed to a container registry accessible by the cluster).
-- RBAC permissions as described in the [Required Permissions](#required-permissions) section.
+- Appropriate RBAC permissions for pod creation, execution, and secret management.
+
+:::note
+Scion utilizes the native Kubernetes Go client API for operations like `exec` and `attach`. The `kubectl` binary is **not** required on the host machine.
+:::
 
 Use `scion doctor` to verify prerequisites before starting agents.
 
@@ -85,6 +89,24 @@ When running in Google Kubernetes Engine (GKE), Scion natively supports Workload
 
 This provides the agent container with an ambient identity, which the underlying harness (e.g., Gemini or Claude via Vertex) can automatically resolve using Application Default Credentials (ADC).
 
+## Architecture & Security
+
+### Native Client & In-Cluster Authentication
+Scion communicates directly with the Kubernetes API using the native Go client, providing high-performance `exec` and `attach` streams without relying on external binaries. If Scion is running inside a Kubernetes cluster (e.g., as a Scion Hub deployment), it automatically detects and uses the in-cluster service account tokens for authentication.
+
+### Pod Security Hardening
+To ensure secure execution, Scion enforces the following pod security policies automatically:
+- **Non-Root Execution**: Agent pods run as the unprivileged `scion` user (UID `1000`).
+- **Environment Injection**: Standard environmental variables like `HOME` (`/home/scion`), `USER` (`scion`), and `LOGNAME` (`scion`) are explicitly injected to prevent sandbox escapes and ensure consistent toolchain behavior.
+
+## Reliability & Auto-Recovery
+
+### Terminal Pod State Reconciliation
+Scion's Kubernetes runtime actively monitors pod phases and reconciles terminal states (e.g., `Failed`, `Evicted`, or unexpectedly `Succeeded`). This active reconciliation improves auto-recovery, ensuring that failed agents are properly cleaned up and rescheduled if necessary.
+
+### GKE Autopilot Auto-Detection
+When running on GKE Autopilot, Scion automatically detects the environment and applies the correct scheduling tolerations required by Autopilot to seamlessly provision workloads without manual node selector configuration.
+
 ## Support Matrix
 
 ### Volume Types
@@ -102,6 +124,7 @@ This provides the agent container with an ambient identity, which the underlying
 |---|---|---|
 | Native K8s Secret | Supported (default) | Secret create/delete RBAC |
 | GKE Secret Store CSI | Supported | `gke: true`, Secrets Store CSI Driver + GCP provider, SecretProviderClass CRD |
+| File-based secret decoding | Supported | Injected via K8s Secret volumes for file-based decoding |
 | ResolvedAuth files | Supported | Injected via K8s Secret volumes (not hostPath) |
 
 Secrets are composable: `ResolvedAuth` and `ResolvedSecrets` are applied independently (not mutually exclusive).

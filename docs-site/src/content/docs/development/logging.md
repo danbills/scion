@@ -382,6 +382,22 @@ SCION_LOG_GCP=true scion server start --enable-hub 2>&1 | \
   jq -r '.message'
 ```
 
+## PTY Escape Sequence Debugging
+
+When troubleshooting complex terminal interactions (such as shifted keys or mouse reporting in the web UI), Scion includes built-in PTY logging capabilities.
+
+To capture raw escape sequences sent and received by the agent's PTY pipeline:
+
+```bash
+# Start the broker with debug logging enabled
+SCION_LOG_LEVEL=debug scion server start --enable-runtime-broker
+```
+
+In debug mode, the broker logs detailed hexadecimal representations of all input and output sequences. This is essential for:
+- Verifying `CSI u` sequences for extended keys (e.g., `Shift+Enter`).
+- Debugging tmux mouse selection payloads (`SGR` format coordinates).
+- Analyzing window resize events and terminal redrawing.
+
 ## Related Guides
 
 - [Observability](/scion/hub-admin/observability/) - Full telemetry pipeline setup

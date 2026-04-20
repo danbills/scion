@@ -79,6 +79,7 @@ gcloud services enable \
     logging.googleapis.com \
     iam.googleapis.com \
     iamcredentials.googleapis.com \
+    secretmanager.googleapis.com \
     --project "${PROJECT_ID}"
 
 # Check if instance already exists

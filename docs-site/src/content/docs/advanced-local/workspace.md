@@ -192,6 +192,10 @@ By default, they are available at two locations within the agent:
 - **Standard Path:** `/scion-volumes/<name>`
 - **Workspace Path:** `/workspace/.scion-volumes/<name>`
 
+### Web Dashboard File Viewer
+
+You can browse the contents of Shared Directories and view file previews directly from the Hub's Web Dashboard. In the grove view, navigate to the Shared Directories tab to inspect files, view sizes, and review content previews without needing to attach to an agent.
+
 ### Storage Backends
 - **Local Workstations:** Backed by directories on the host filesystem.
 - **Kubernetes:** Backed by PersistentVolumeClaims (PVCs) with grove-scoped lifecycle management, ensuring data persists across pod restarts and can be accessed by any agent in the grove.

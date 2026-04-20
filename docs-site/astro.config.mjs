@@ -92,11 +92,11 @@ export default defineConfig({
 						{ label: 'Web Dashboard', slug: 'hub-user/dashboard' },
 						{ label: 'Secret Management', slug: 'hub-user/secrets' },
 						{ label: 'Runtime Broker', slug: 'hub-user/runtime-broker' },
+						{ label: 'Messaging & Notifications', slug: 'hub-user/messaging' },
 					],
 				},
 				{
-					label: 'Hub Administration',
-					items: [
+				        label: 'Hub Administration',					items: [
 						{ label: 'Hub Setup', slug: 'hub-admin/hub-server' },
 						{ label: 'Kubernetes', slug: 'hub-admin/kubernetes' },
 						{ label: 'Security', slug: 'hub-admin/auth' },

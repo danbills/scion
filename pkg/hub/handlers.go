@@ -1382,9 +1382,14 @@ func (s *Server) handleAgentByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Handle per-agent messages list (GET, handled before the POST-only
-	// action gate). Returns the bidirectional conversation between the
-	// authenticated user and this agent from the hub message store.
+	// Handle per-agent messages (GET endpoints, handled before the
+	// POST-only action gate). Both the list and the real-time stream
+	// are backed by the hub message store / event bus and work without
+	// Cloud Logging being configured.
+	if action == api.AgentActionMessagesStream {
+		s.handleAgentMessagesStream(w, r, id)
+		return
+	}
 	if action == api.AgentActionMessages {
 		s.handleAgentMessages(w, r, id)
 		return
@@ -2298,6 +2303,10 @@ func (s *Server) handleAgentMessage(w http.ResponseWriter, r *http.Request, id s
 		if err := s.store.CreateMessage(ctx, storeMsg); err != nil {
 			s.messageLog.Error("Failed to persist message", "error", err)
 		}
+		// Publish SSE event so connected browser clients can update the
+		// per-agent conversation view in real time — mirrors the agent→user
+		// publish path in handleAgentOutboundMessage.
+		s.events.PublishUserMessage(ctx, storeMsg)
 	}
 
 	// If a dispatcher is available, dispatch the message to the runtime broker
@@ -2621,11 +2630,13 @@ type StopAllAgentsResponse struct {
 	Stopped int             `json:"stopped"`
 	Failed  int             `json:"failed"`
 	Total   int             `json:"total"`
+	Scope   string          `json:"scope,omitempty"` // "all" or "own"
 	Results []stopAllResult `json:"results"`
 }
 
 // handleStopAllAgents stops all running agents, optionally scoped to a grove.
-// Requires admin role. Fans out stop operations concurrently to each broker.
+// Global (groveID=="") requires platform admin. Grove-scoped allows any grove
+// member: owners/admins stop all agents, regular members stop only their own.
 func (s *Server) handleStopAllAgents(w http.ResponseWriter, r *http.Request, groveID string) {
 	if r.Method != http.MethodPost {
 		MethodNotAllowed(w)
@@ -2634,18 +2645,43 @@ func (s *Server) handleStopAllAgents(w http.ResponseWriter, r *http.Request, gro
 
 	ctx := r.Context()
 
-	// Require admin role
 	userIdent := GetUserIdentityFromContext(ctx)
-	if userIdent == nil || userIdent.Role() != "admin" {
-		writeError(w, http.StatusForbidden, ErrCodeForbidden,
-			"Only admins can stop all agents", nil)
+	if userIdent == nil {
+		writeError(w, http.StatusUnauthorized, ErrCodeUnauthorized,
+			"Authentication required", nil)
 		return
 	}
 
-	// List running agents (optionally scoped to grove)
+	// Determine authorization and scope
+	scope := "all"
 	filter := store.AgentFilter{
 		GroveID: groveID,
 		Phase:   string(state.PhaseRunning),
+	}
+
+	if groveID == "" {
+		// Global stop-all: platform admin only
+		if userIdent.Role() != "admin" {
+			writeError(w, http.StatusForbidden, ErrCodeForbidden,
+				"Only admins can stop all agents", nil)
+			return
+		}
+	} else {
+		// Grove-scoped stop-all: any grove member allowed
+		isAdmin := userIdent.Role() == "admin"
+		if !isAdmin {
+			groveRole := s.resolveUserGroveRole(ctx, groveID, userIdent.ID())
+			if groveRole == "" {
+				writeError(w, http.StatusForbidden, ErrCodeForbidden,
+					"You are not a member of this grove", nil)
+				return
+			}
+			// Regular members can only stop their own agents
+			if groveRole != store.GroupMemberRoleOwner && groveRole != store.GroupMemberRoleAdmin {
+				filter.OwnerID = userIdent.ID()
+				scope = "own"
+			}
+		}
 	}
 
 	result, err := s.store.ListAgents(ctx, filter, store.ListOptions{
@@ -2659,6 +2695,7 @@ func (s *Server) handleStopAllAgents(w http.ResponseWriter, r *http.Request, gro
 	agents := result.Items
 	if len(agents) == 0 {
 		writeJSON(w, http.StatusOK, StopAllAgentsResponse{
+			Scope:   scope,
 			Results: []stopAllResult{},
 		})
 		return
@@ -2736,8 +2773,30 @@ func (s *Server) handleStopAllAgents(w http.ResponseWriter, r *http.Request, gro
 		Stopped: stopped,
 		Failed:  failed,
 		Total:   len(results),
+		Scope:   scope,
 		Results: results,
 	})
+}
+
+// resolveUserGroveRole returns the user's role in the grove's members group.
+// Returns "" if the user is not a member of the grove.
+func (s *Server) resolveUserGroveRole(ctx context.Context, groveID, userID string) string {
+	groups, err := s.store.ListGroups(ctx, store.GroupFilter{
+		GroveID:   groveID,
+		GroupType: store.GroupTypeExplicit,
+	}, store.ListOptions{Limit: 10})
+	if err != nil || len(groups.Items) == 0 {
+		return ""
+	}
+
+	for _, g := range groups.Items {
+		membership, err := s.store.GetGroupMembership(ctx, g.ID, store.GroupMemberTypeUser, userID)
+		if err != nil {
+			continue
+		}
+		return membership.Role
+	}
+	return ""
 }
 
 // ============================================================================
@@ -2824,12 +2883,32 @@ func (s *Server) listGroves(w http.ResponseWriter, r *http.Request) {
 		Slug:       query.Get("slug"),
 	}
 
-	// mine=true: restrict to groves the current user owns or is a member of
-	if query.Get("mine") == "true" {
+	// scope=mine: groves the current user owns
+	// scope=shared: groves where the user is a member/admin but not the owner
+	// mine=true (legacy): groves the user owns or is a member of
+	switch query.Get("scope") {
+	case "mine":
 		if userIdent := GetUserIdentityFromContext(ctx); userIdent != nil {
 			filter.OwnerID = userIdent.ID()
+		}
+	case "shared":
+		if userIdent := GetUserIdentityFromContext(ctx); userIdent != nil {
 			if groveIDs := s.resolveUserGroveIDs(ctx, userIdent.ID()); len(groveIDs) > 0 {
-				filter.MemberOrOwnerIDs = groveIDs
+				filter.MemberGroveIDs = groveIDs
+				filter.ExcludeOwnerID = userIdent.ID()
+			} else {
+				// User has no group memberships — return empty result
+				filter.MemberGroveIDs = []string{"__none__"}
+			}
+		}
+	default:
+		// Legacy mine=true support
+		if query.Get("mine") == "true" {
+			if userIdent := GetUserIdentityFromContext(ctx); userIdent != nil {
+				filter.OwnerID = userIdent.ID()
+				if groveIDs := s.resolveUserGroveIDs(ctx, userIdent.ID()); len(groveIDs) > 0 {
+					filter.MemberOrOwnerIDs = groveIDs
+				}
 			}
 		}
 	}
@@ -3182,16 +3261,16 @@ func (s *Server) createGroveMembersGroupAndPolicy(ctx context.Context, grove *st
 		}
 	}
 
-	// Create grove-level policy for member agent creation
+	// Create grove-level policy for member agent creation and stop-all
 	policyName := "grove:" + grove.Slug + ":member-create-agents"
 	policy := &store.Policy{
 		ID:           api.NewUUID(),
 		Name:         policyName,
-		Description:  "Allow grove members to create agents",
+		Description:  "Allow grove members to create and stop agents",
 		ScopeType:    "grove",
 		ScopeID:      grove.ID,
 		ResourceType: "agent",
-		Actions:      []string{"create"},
+		Actions:      []string{"create", "stop_all"},
 		Effect:       "allow",
 	}
 	if err := s.store.CreatePolicy(ctx, policy); err != nil {
@@ -3209,10 +3288,26 @@ func (s *Server) createGroveMembersGroupAndPolicy(ctx context.Context, grove *st
 			return
 		}
 		policy = &existing.Items[0]
+		needsUpdate := false
 		if policy.ScopeID != grove.ID {
 			policy.ScopeID = grove.ID
+			needsUpdate = true
+		}
+		// Backfill: ensure stop_all action is present for existing groves
+		hasStopAll := false
+		for _, a := range policy.Actions {
+			if a == "stop_all" {
+				hasStopAll = true
+				break
+			}
+		}
+		if !hasStopAll {
+			policy.Actions = append(policy.Actions, "stop_all")
+			needsUpdate = true
+		}
+		if needsUpdate {
 			if updateErr := s.store.UpdatePolicy(ctx, policy); updateErr != nil {
-				slog.Warn("failed to update existing grove member policy scope",
+				slog.Warn("failed to update existing grove member policy",
 					"grove_id", grove.ID, "policy", policyName, "error", updateErr.Error())
 			}
 		}
@@ -4380,6 +4475,11 @@ func (s *Server) handleGroveAgentAction(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
+	// NOTE: messages/stream is intentionally NOT routed here. The grove-
+	// scoped path only serves message-logs endpoints (Cloud Logging).
+	// The hub-store-backed messages/stream is agent-scoped only
+	// (/api/v1/agents/{id}/messages/stream), matching handleAgentByID.
+
 	if r.Method != http.MethodPost {
 		MethodNotAllowed(w)
 		return
@@ -4512,6 +4612,15 @@ func (s *Server) updateGrove(w http.ResponseWriter, r *http.Request, id string) 
 		return
 	}
 
+	if userIdent := GetUserIdentityFromContext(ctx); userIdent != nil {
+		decision := s.authzService.CheckAccess(ctx, userIdent, groveResource(grove), ActionUpdate)
+		if !decision.Allowed {
+			writeError(w, http.StatusForbidden, ErrCodeForbidden,
+				"You do not have permission to update this grove", nil)
+			return
+		}
+	}
+
 	var updates struct {
 		Name                   string            `json:"name,omitempty"`
 		Labels                 map[string]string `json:"labels,omitempty"`
@@ -4555,6 +4664,15 @@ func (s *Server) deleteGrove(w http.ResponseWriter, r *http.Request, id string) 
 	if err != nil {
 		writeErrorFromErr(w, err, "")
 		return
+	}
+
+	if userIdent := GetUserIdentityFromContext(ctx); userIdent != nil {
+		decision := s.authzService.CheckAccess(ctx, userIdent, groveResource(grove), ActionDelete)
+		if !decision.Allowed {
+			writeError(w, http.StatusForbidden, ErrCodeForbidden,
+				"You do not have permission to delete this grove", nil)
+			return
+		}
 	}
 
 	// Dispatch agent deletions to runtime brokers so containers are stopped
@@ -5307,17 +5425,12 @@ func (s *Server) enrichGroveOwnerNames(ctx context.Context, groves []store.Grove
 	}
 }
 
-// resolveUserGroveIDs returns grove IDs from the user's group memberships.
-// Groups with a non-empty GroveID represent grove membership.
+// resolveUserGroveIDs returns grove IDs from the user's group memberships,
+// including transitive memberships through nested groups.
 func (s *Server) resolveUserGroveIDs(ctx context.Context, userID string) []string {
-	memberships, err := s.store.GetUserGroups(ctx, userID)
-	if err != nil || len(memberships) == 0 {
+	groupIDs, err := s.store.GetEffectiveGroups(ctx, userID)
+	if err != nil || len(groupIDs) == 0 {
 		return nil
-	}
-
-	groupIDs := make([]string, 0, len(memberships))
-	for _, m := range memberships {
-		groupIDs = append(groupIDs, m.GroupID)
 	}
 
 	groups, err := s.store.GetGroupsByIDs(ctx, groupIDs)
@@ -5851,7 +5964,7 @@ func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	totalCount := result.TotalCount
-	if identity != nil {
+	if identity != nil && len(users) < len(result.Items) {
 		totalCount = len(users)
 	}
 

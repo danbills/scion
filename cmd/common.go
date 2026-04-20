@@ -211,11 +211,12 @@ func CheckHubAvailabilityForAgents(grovePath string, excludedAgents []string, sk
 	}
 
 	opts := hubsync.EnsureHubReadyOptions{
-		AutoConfirm:    autoConfirm,
-		NoHub:          noHub,
-		SkipSync:       skipSync,
-		TargetAgent:    targetAgent,
-		ExcludedAgents: excludedAgents,
+		AutoConfirm:      autoConfirm,
+		NoHub:            noHub,
+		EndpointOverride: hubEndpoint,
+		SkipSync:         skipSync,
+		TargetAgent:      targetAgent,
+		ExcludedAgents:   excludedAgents,
 	}
 
 	hubCtx, err := hubsync.EnsureHubReady(grovePath, opts)
@@ -321,10 +322,10 @@ func RunAgent(cmd *cobra.Command, args []string, resume bool) error {
 	// Validate --harness-auth value
 	if harnessAuthFlag != "" {
 		switch harnessAuthFlag {
-		case "api-key", "vertex-ai", "auth-file":
+		case "api-key", "oauth-token", "auth-file", "vertex-ai":
 			// valid
 		default:
-			return fmt.Errorf("invalid --harness-auth value %q: must be one of api-key, vertex-ai, auth-file", harnessAuthFlag)
+			return fmt.Errorf("invalid --harness-auth value %q: must be one of api-key, oauth-token, auth-file, vertex-ai", harnessAuthFlag)
 		}
 	}
 

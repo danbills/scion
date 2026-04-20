@@ -83,12 +83,19 @@ func templateResource(t *store.Template) Resource {
 
 // groupResource constructs a Resource from a store.Group for capability computation.
 func groupResource(g *store.Group) Resource {
-	return Resource{
+	r := Resource{
 		Type:    "group",
 		ID:      g.ID,
 		OwnerID: g.OwnerID,
 		Labels:  g.Labels,
 	}
+	// Grove-scoped groups (e.g. "grove:<slug>:members") are children of the
+	// grove. Setting the parent lets grove owner/admin bypass apply.
+	if g.GroveID != "" {
+		r.ParentType = "grove"
+		r.ParentID = g.GroveID
+	}
+	return r
 }
 
 // userResource constructs a Resource from a store.User for capability computation.
@@ -101,11 +108,17 @@ func userResource(u *store.User) Resource {
 
 // policyResource constructs a Resource from a store.Policy for capability computation.
 func policyResource(p *store.Policy) Resource {
-	return Resource{
+	r := Resource{
 		Type:   "policy",
 		ID:     p.ID,
 		Labels: p.Labels,
 	}
+	// Grove-scoped policies are children of the grove for authz purposes.
+	if p.ScopeType == "grove" && p.ScopeID != "" {
+		r.ParentType = "grove"
+		r.ParentID = p.ScopeID
+	}
+	return r
 }
 
 // brokerResource constructs a Resource from a store.RuntimeBroker for capability computation.
@@ -140,6 +153,17 @@ func (a *AuthzService) ComputeCapabilities(ctx context.Context, identity Identit
 		return allActions(actions)
 	}
 
+	// Grove owner/admin short-circuit: full access on grove and grove-scoped
+	// resources. Mirrors the bypass in checkAccessForUser so capability lists
+	// match what the user can actually do.
+	if user, ok := identity.(UserIdentity); ok {
+		if groveID := groveIDForResource(resource); groveID != "" {
+			if a.isGroveOwnerOrAdmin(ctx, user.ID(), groveID) {
+				return allActions(actions)
+			}
+		}
+	}
+
 	var allowed []string
 	for _, action := range actions {
 		decision := a.CheckAccess(ctx, identity, resource, action)
@@ -169,6 +193,14 @@ func (a *AuthzService) ComputeScopeCapabilities(ctx context.Context, identity Id
 		Type:       resourceType,
 		ParentType: scopeType,
 		ParentID:   scopeID,
+	}
+
+	// Grove owner/admin short-circuit at scope level (e.g. agent:create
+	// inside a grove the user owns).
+	if user, ok := identity.(UserIdentity); ok && scopeType == "grove" && scopeID != "" {
+		if a.isGroveOwnerOrAdmin(ctx, user.ID(), scopeID) {
+			return allActions(actions)
+		}
 	}
 
 	var allowed []string
@@ -209,6 +241,25 @@ func (a *AuthzService) ComputeCapabilitiesBatch(ctx context.Context, identity Id
 	// Pre-fetch principals and policies once for the identity
 	principals, policies := a.precomputeForIdentity(ctx, identity)
 
+	// Per-batch grove ownership cache. Most batches list resources from a
+	// single grove, so this collapses to one lookup per grove.
+	groveOwnerCache := map[string]bool{}
+	isGroveOwner := func(groveID string) bool {
+		if groveID == "" {
+			return false
+		}
+		user, ok := identity.(UserIdentity)
+		if !ok {
+			return false
+		}
+		if cached, ok := groveOwnerCache[groveID]; ok {
+			return cached
+		}
+		v := a.isGroveOwnerOrAdmin(ctx, user.ID(), groveID)
+		groveOwnerCache[groveID] = v
+		return v
+	}
+
 	caps := make([]*Capabilities, len(resources))
 	for i, resource := range resources {
 		// Owner short-circuit
@@ -218,6 +269,11 @@ func (a *AuthzService) ComputeCapabilitiesBatch(ctx context.Context, identity Id
 		}
 		// Ancestry short-circuit: ancestors get full access
 		if canAccessAsAncestor(identity.ID(), resource) {
+			caps[i] = allActions(actions)
+			continue
+		}
+		// Grove owner/admin short-circuit
+		if isGroveOwner(groveIDForResource(resource)) {
 			caps[i] = allActions(actions)
 			continue
 		}

@@ -2,6 +2,8 @@
 .scion/agents
 .scion/harness-configs
 .scion/settings.yaml
+.scion/grove-id
+.scion/state.yaml
 examples/*/.scion/agents/
 examples/*/.scion/harness-configs/
 examples/*/.scion/grove-id
@@ -12,6 +14,7 @@ examples/*/scripts/.test-output/
 
 # local claude code settings
 .claude/
+
 # binaries
 /build/
 /.build/

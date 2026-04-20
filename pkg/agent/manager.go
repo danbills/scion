@@ -89,6 +89,22 @@ func (m *AgentManager) Close() {
 }
 
 func (m *AgentManager) Stop(ctx context.Context, agentID string) error {
+	// Resolve the agent name to a container ID so that runtimes which do
+	// not support lookup-by-name (e.g. Apple's `container` CLI) receive
+	// the actual container ID.  This mirrors the resolution logic in Delete().
+	slug := api.Slugify(agentID)
+	agents, err := m.Runtime.List(ctx, map[string]string{"scion.name": slug})
+	if err == nil {
+		for _, a := range agents {
+			if a.Name == agentID || a.ContainerID == agentID ||
+				strings.TrimPrefix(a.Name, "/") == agentID ||
+				strings.EqualFold(a.Name, agentID) {
+				return m.Runtime.Stop(ctx, a.ContainerID)
+			}
+		}
+	}
+	// Fallback: agentID may already be a container ID, or the list
+	// failed — pass it through directly.
 	return m.Runtime.Stop(ctx, agentID)
 }
 
@@ -225,10 +241,16 @@ func (m *AgentManager) deliverImmediate(ctx context.Context, agentID string, mes
 		return fmt.Errorf("agent '%s' not found or not running", agentID)
 	}
 
-	// 2. Resolve harness
+	// 2. Resolve harness — probe both layouts (worktree vs shared-workspace
+	// per .design/hub-shared-workspace-isolation.md) since the mode isn't
+	// passed through this lookup path.
 	harnessName := "generic"
 	if agent.GrovePath != "" {
-		scionJSON := filepath.Join(agent.GrovePath, "agents", agent.Name, "scion-agent.json")
+		projectDir, _ := config.GetResolvedProjectDir(agent.GrovePath)
+		if projectDir == "" {
+			projectDir = agent.GrovePath
+		}
+		scionJSON := filepath.Join(config.ResolveAgentDir(projectDir, agent.Name), "scion-agent.json")
 		if data, err := os.ReadFile(scionJSON); err == nil {
 			var cfg api.ScionConfig
 			if err := json.Unmarshal(data, &cfg); err == nil && cfg.Harness != "" {

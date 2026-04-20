@@ -1019,6 +1019,174 @@ func TestListGrovesByGitRemoteExactMatch(t *testing.T) {
 	assert.Equal(t, grove2.ID, result.Items[0].ID)
 }
 
+func TestListGrovesSharedScope(t *testing.T) {
+	s := setupTestStore(t)
+	ctx := context.Background()
+
+	ownerID := api.NewUUID()
+	otherOwnerID := api.NewUUID()
+
+	ownedGrove := &store.Grove{
+		ID:         api.NewUUID(),
+		Name:       "Owned Grove",
+		Slug:       "owned-grove",
+		OwnerID:    ownerID,
+		Visibility: store.VisibilityPrivate,
+	}
+	sharedGrove := &store.Grove{
+		ID:         api.NewUUID(),
+		Name:       "Shared Grove",
+		Slug:       "shared-grove",
+		OwnerID:    otherOwnerID,
+		Visibility: store.VisibilityPrivate,
+	}
+	unrelatedGrove := &store.Grove{
+		ID:         api.NewUUID(),
+		Name:       "Unrelated Grove",
+		Slug:       "unrelated-grove",
+		OwnerID:    otherOwnerID,
+		Visibility: store.VisibilityPrivate,
+	}
+	require.NoError(t, s.CreateGrove(ctx, ownedGrove))
+	require.NoError(t, s.CreateGrove(ctx, sharedGrove))
+	require.NoError(t, s.CreateGrove(ctx, unrelatedGrove))
+
+	// scope=mine: only groves owned by the user
+	result, err := s.ListGroves(ctx, store.GroveFilter{OwnerID: ownerID}, store.ListOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.TotalCount)
+	assert.Equal(t, ownedGrove.ID, result.Items[0].ID)
+
+	// scope=shared: MemberGroveIDs includes both owned and shared grove IDs,
+	// but ExcludeOwnerID removes the owned one
+	result, err = s.ListGroves(ctx, store.GroveFilter{
+		MemberGroveIDs: []string{ownedGrove.ID, sharedGrove.ID},
+		ExcludeOwnerID: ownerID,
+	}, store.ListOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.TotalCount)
+	assert.Equal(t, sharedGrove.ID, result.Items[0].ID)
+
+	// MemberGroveIDs without ExcludeOwnerID returns all matched groves
+	result, err = s.ListGroves(ctx, store.GroveFilter{
+		MemberGroveIDs: []string{ownedGrove.ID, sharedGrove.ID},
+	}, store.ListOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, 2, result.TotalCount)
+
+	// Empty MemberGroveIDs with ExcludeOwnerID is a no-op on membership filter
+	result, err = s.ListGroves(ctx, store.GroveFilter{
+		ExcludeOwnerID: ownerID,
+	}, store.ListOptions{})
+	require.NoError(t, err)
+	// Returns all groves not owned by ownerID
+	assert.Equal(t, 2, result.TotalCount)
+}
+
+func TestListGrovesSharedScopeTransitiveGroup(t *testing.T) {
+	s := setupTestStore(t)
+	ctx := context.Background()
+
+	userID := "user_transitive"
+	otherOwnerID := api.NewUUID()
+
+	// Create a grove owned by someone else
+	sharedGrove := &store.Grove{
+		ID:         api.NewUUID(),
+		Name:       "Transitively Shared Grove",
+		Slug:       "trans-shared-grove",
+		OwnerID:    otherOwnerID,
+		Visibility: store.VisibilityPrivate,
+	}
+	require.NoError(t, s.CreateGrove(ctx, sharedGrove))
+
+	// Create a grove_agents group linked to the grove (simulates the grove
+	// membership group that is created when a grove gains members).
+	groveGroup := &store.Group{
+		ID:        api.NewUUID(),
+		Name:      "Grove Agents",
+		Slug:      "grove-agents-trans",
+		GroupType: "grove_agents",
+		GroveID:   sharedGrove.ID,
+		Created:   time.Now(),
+		Updated:   time.Now(),
+	}
+	// Create an intermediate parent group that is a member of the grove group
+	parentGroup := &store.Group{
+		ID:      api.NewUUID(),
+		Name:    "Team Alpha",
+		Slug:    "team-alpha",
+		Created: time.Now(),
+		Updated: time.Now(),
+	}
+	// Create the child group the user is a direct member of
+	childGroup := &store.Group{
+		ID:      api.NewUUID(),
+		Name:    "Sub-Team",
+		Slug:    "sub-team",
+		Created: time.Now(),
+		Updated: time.Now(),
+	}
+
+	for _, g := range []*store.Group{groveGroup, parentGroup, childGroup} {
+		require.NoError(t, s.CreateGroup(ctx, g))
+	}
+
+	// parentGroup is a member of groveGroup (admin access to the grove)
+	require.NoError(t, s.AddGroupMember(ctx, &store.GroupMember{
+		GroupID:    groveGroup.ID,
+		MemberType: "group",
+		MemberID:   parentGroup.ID,
+		Role:       "admin",
+		AddedAt:    time.Now(),
+	}))
+
+	// childGroup is a member of parentGroup
+	require.NoError(t, s.AddGroupMember(ctx, &store.GroupMember{
+		GroupID:    parentGroup.ID,
+		MemberType: "group",
+		MemberID:   childGroup.ID,
+		Role:       "member",
+		AddedAt:    time.Now(),
+	}))
+
+	// User is a direct member of childGroup only
+	require.NoError(t, s.AddGroupMember(ctx, &store.GroupMember{
+		GroupID:    childGroup.ID,
+		MemberType: "user",
+		MemberID:   userID,
+		Role:       "member",
+		AddedAt:    time.Now(),
+	}))
+
+	// GetEffectiveGroups should return all three groups (child, parent, grove)
+	effectiveGroupIDs, err := s.GetEffectiveGroups(ctx, userID)
+	require.NoError(t, err)
+	assert.Len(t, effectiveGroupIDs, 3)
+
+	// Resolve grove IDs from effective groups (mirrors resolveUserGroveIDs)
+	groups, err := s.GetGroupsByIDs(ctx, effectiveGroupIDs)
+	require.NoError(t, err)
+
+	var groveIDs []string
+	for _, g := range groups {
+		if g.GroveID != "" {
+			groveIDs = append(groveIDs, g.GroveID)
+		}
+	}
+	require.Len(t, groveIDs, 1, "should find grove via transitive group membership")
+	assert.Equal(t, sharedGrove.ID, groveIDs[0])
+
+	// Using the resolved grove IDs in a shared scope filter should return the grove
+	result, err := s.ListGroves(ctx, store.GroveFilter{
+		MemberGroveIDs: groveIDs,
+		ExcludeOwnerID: userID,
+	}, store.ListOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.TotalCount)
+	assert.Equal(t, sharedGrove.ID, result.Items[0].ID)
+}
+
 func TestRuntimeBrokerLookupByName(t *testing.T) {
 	s := setupTestStore(t)
 	ctx := context.Background()

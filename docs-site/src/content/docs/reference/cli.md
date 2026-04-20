@@ -81,6 +81,20 @@ Sends a message to a running agent's harness by enqueuing it into its input stre
     - `-a, --all`: Send the message to all running agents across all groves.
     - `--notify`: Get notified when the target agent(s) respond or reach a terminal state after receiving the message.
 
+### `scion messages` (aliases: `msgs`, `inbox`)
+
+Manages bidirectional communication and persistent messages sent by agents to humans.
+
+**Usage:** `scion messages [command] [flags]`
+
+- **Commands:**
+    - `list` (default): View unread messages.
+    - `read <message-id>`: Mark a specific message as read.
+    - `read-all`: Mark all messages as read.
+- **Flags:**
+    - `--agent <string>`: Filter messages by a specific agent.
+    - `--all`: Show all messages, including those already marked as read.
+
 ### `scion logs`
 
 Displays the logs of an agent.
@@ -204,12 +218,24 @@ Manages agent templates.
 
 ## Hub Integration
 
+### `scion auth`
+
+Manages authentication with a Scion Hub, including User Access Tokens.
+
+- `login`: Authenticate against the Hub (opens a browser).
+- `tokens`: Manage Personal Access Tokens (PATs).
+    - `list`: List all active tokens.
+    - `create <name>`: Create a new token with optional scopes.
+    - `revoke <token-id>`: Revoke a specific token.
+
 ### `scion hub`
 
 Manages connection to and interaction with a Scion Hub.
 
+- `scion hub auth`: Manage Hub authentication.
+    - `login`: Authenticate with Hub server (supports `--provider github`).
+    - `logout`: Clear stored credentials.
 - `scion hub status`: Show the current Hub connection status.
-- `scion hub auth login`: Authenticate against the Hub (opens a browser).
 - `scion hub notifications`: Retrieve a list of recent system notifications and agent alerts.
 - `scion hub link`: Link the current local grove to the Hub.
 - `scion hub unlink`: Unlink the current grove from the Hub locally.

@@ -62,6 +62,19 @@ interface MaintenanceResponse {
   operations: MaintenanceOperationWithRun[] | null;
 }
 
+interface UpdateCommitInfo {
+  hash: string;
+  subject: string;
+}
+
+interface UpdateCheckResult {
+  update_available: boolean;
+  current_commit: string;
+  latest_commit: string;
+  commits_behind: number;
+  new_commits?: UpdateCommitInfo[];
+}
+
 @customElement('scion-page-admin-maintenance')
 export class ScionPageAdminMaintenance extends LitElement {
   @state()
@@ -110,6 +123,16 @@ export class ScionPageAdminMaintenance extends LitElement {
   /** Run detail currently being viewed. */
   @state()
   private viewingRun: MaintenanceRun | null = null;
+
+  /** Update check state for rebuild-server. */
+  @state()
+  private updateCheckLoading = false;
+
+  @state()
+  private updateCheckError: string | null = null;
+
+  @state()
+  private updateCheckResult: UpdateCheckResult | null = null;
 
   static override styles = css`
     :host {
@@ -341,6 +364,59 @@ export class ScionPageAdminMaintenance extends LitElement {
       color: var(--sl-color-primary-700, #1d4ed8);
     }
 
+    /* -- Update check banner --------------------------------------------- */
+
+    .update-check-banner {
+      margin-top: 0.5rem;
+      margin-bottom: 0.5rem;
+      padding: 0.625rem 0.75rem;
+      border-radius: 0.375rem;
+      border: 1px solid var(--sl-color-primary-200, #bfdbfe);
+      background: var(--sl-color-primary-50, #eff6ff);
+      font-size: 0.8125rem;
+    }
+
+    .update-check-banner.up-to-date {
+      border-color: var(--sl-color-success-200, #bbf7d0);
+      background: var(--sl-color-success-50, #f0fdf4);
+    }
+
+    .update-check-header {
+      display: flex;
+      align-items: center;
+      gap: 0.375rem;
+      font-weight: 600;
+      color: var(--sl-color-primary-700, #1d4ed8);
+    }
+
+    .update-check-banner.up-to-date .update-check-header {
+      color: var(--sl-color-success-700, #15803d);
+    }
+
+    .update-check-header sl-icon {
+      font-size: 0.875rem;
+    }
+
+    .update-check-commits {
+      margin-top: 0.375rem;
+      max-height: 8rem;
+      overflow-y: auto;
+      font-family: var(--sl-font-mono, monospace);
+      line-height: 1.5;
+      color: var(--scion-text, #1e293b);
+    }
+
+    .update-check-commits .commit-hash {
+      color: var(--sl-color-primary-600, #2563eb);
+      margin-right: 0.375rem;
+    }
+
+    .update-check-error {
+      margin-top: 0.375rem;
+      font-size: 0.8125rem;
+      color: var(--sl-color-danger-700, #b91c1c);
+    }
+
     /* -- Run history table ------------------------------------------------ */
 
     .history-toggle {
@@ -515,9 +591,12 @@ export class ScionPageAdminMaintenance extends LitElement {
     }
   }
 
-  private async loadData(): Promise<void> {
-    this.loading = true;
-    this.error = null;
+  private async loadData(isPolling = false): Promise<void> {
+    // Only show loading spinner on initial load, not during poll refreshes.
+    if (!isPolling) {
+      this.loading = true;
+      this.error = null;
+    }
 
     try {
       const response = await apiFetch('/api/v1/admin/maintenance/operations');
@@ -526,8 +605,16 @@ export class ScionPageAdminMaintenance extends LitElement {
       }
 
       const data = (await response.json()) as MaintenanceResponse;
-      this.migrations = data.migrations ?? [];
-      this.operations = data.operations ?? [];
+      const newMigrations = data.migrations ?? [];
+      const newOperations = data.operations ?? [];
+
+      // Only update state (and trigger re-render) if data actually changed.
+      if (JSON.stringify(this.migrations) !== JSON.stringify(newMigrations)) {
+        this.migrations = newMigrations;
+      }
+      if (JSON.stringify(this.operations) !== JSON.stringify(newOperations)) {
+        this.operations = newOperations;
+      }
 
       // Start polling if any migration or operation run is active.
       const hasRunning =
@@ -540,15 +627,19 @@ export class ScionPageAdminMaintenance extends LitElement {
       }
     } catch (err) {
       console.error('Failed to load maintenance operations:', err);
-      this.error = err instanceof Error ? err.message : 'Failed to load maintenance operations';
+      if (!isPolling) {
+        this.error = err instanceof Error ? err.message : 'Failed to load maintenance operations';
+      }
     } finally {
-      this.loading = false;
+      if (!isPolling) {
+        this.loading = false;
+      }
     }
   }
 
   private startPolling(): void {
     if (this.pollTimer) return;
-    this.pollTimer = setInterval(() => void this.loadData(), 3000);
+    this.pollTimer = setInterval(() => void this.loadData(true), 3000);
   }
 
   private stopPolling(): void {
@@ -984,6 +1075,7 @@ export class ScionPageAdminMaintenance extends LitElement {
     const isRunning = op.lastRun?.status === 'running';
     const historyExpanded = this.expandedHistory.has(op.key);
     const runs = this.runHistory.get(op.key) ?? [];
+    const isRebuild = op.key === 'rebuild-server';
 
     return html`
       <div class="card">
@@ -992,6 +1084,20 @@ export class ScionPageAdminMaintenance extends LitElement {
             ? html`<sl-spinner style="font-size: 1.25rem;"></sl-spinner>`
             : html`<sl-icon name="play-circle" class="pending"></sl-icon>`}
           <span class="card-title">${op.title}</span>
+          ${isRebuild
+            ? html`
+                <sl-button
+                  size="small"
+                  variant="default"
+                  ?loading=${this.updateCheckLoading}
+                  ?disabled=${isRunning}
+                  @click=${() => this.checkForUpdates()}
+                >
+                  <sl-icon slot="prefix" name="arrow-clockwise"></sl-icon>
+                  Check for Updates
+                </sl-button>
+              `
+            : nothing}
           ${isRunning
             ? html`<sl-button size="small" disabled loading>Running...</sl-button>`
             : html`
@@ -1006,6 +1112,7 @@ export class ScionPageAdminMaintenance extends LitElement {
               `}
         </div>
         <div class="card-description">${op.description}</div>
+        ${isRebuild ? this.renderUpdateCheckBanner() : nothing}
         ${op.lastRun
           ? html`
               <div class="card-meta">
@@ -1200,6 +1307,70 @@ export class ScionPageAdminMaintenance extends LitElement {
           @click=${() => this.closeRunDetail()}
         >Close</sl-button>
       </sl-dialog>
+    `;
+  }
+
+  // ── Update check ──
+
+  private async checkForUpdates(): Promise<void> {
+    this.updateCheckLoading = true;
+    this.updateCheckError = null;
+    this.updateCheckResult = null;
+    try {
+      const res = await apiFetch('/api/v1/admin/maintenance/check-updates', {
+        method: 'POST',
+      });
+      if (!res.ok) {
+        this.updateCheckError = await extractApiError(res, 'Failed to check for updates');
+        return;
+      }
+      this.updateCheckResult = (await res.json()) as UpdateCheckResult;
+    } catch {
+      this.updateCheckError = 'Failed to connect to server';
+    } finally {
+      this.updateCheckLoading = false;
+    }
+  }
+
+  private renderUpdateCheckBanner() {
+    if (this.updateCheckError) {
+      return html`<div class="update-check-error">${this.updateCheckError}</div>`;
+    }
+    const r = this.updateCheckResult;
+    if (!r) return nothing;
+
+    if (!r.update_available) {
+      return html`
+        <div class="update-check-banner up-to-date">
+          <div class="update-check-header">
+            <sl-icon name="check-circle"></sl-icon>
+            Server is up to date
+          </div>
+        </div>
+      `;
+    }
+
+    return html`
+      <div class="update-check-banner">
+        <div class="update-check-header">
+          <sl-icon name="info-circle"></sl-icon>
+          Update available &mdash; ${r.commits_behind} new
+          commit${r.commits_behind === 1 ? '' : 's'}
+        </div>
+        ${r.new_commits && r.new_commits.length > 0
+          ? html`
+              <div class="update-check-commits">
+                ${r.new_commits.map(
+                  (c) => html`
+                    <div>
+                      <span class="commit-hash">${c.hash}</span>${c.subject}
+                    </div>
+                  `,
+                )}
+              </div>
+            `
+          : nothing}
+      </div>
     `;
   }
 }

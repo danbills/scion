@@ -26,6 +26,14 @@ core-base          System dependencies (Go, Node, Python, Git)
 
 The `core-base` layer changes infrequently. Most rebuilds only need `scion-base` and the harness layers (the `common` build target).
 
+### Non-Root Requirement
+
+For security and compatibility across runtimes (especially Kubernetes), Scion agents are required to run as a non-root user.
+
+- **User**: The base images create a `scion` user.
+- **UID**: The user must have UID `1000`.
+- **Permissions**: Ensure your custom images do not require root privileges at runtime and that any added files or directories are accessible by the `scion` user. Home directory structure (`/home/scion`) and environmental variables (`HOME`, `USER`, `LOGNAME`) are automatically injected by the runtime.
+
 ## Quick Start
 
 ### Option 1: Local Docker Build

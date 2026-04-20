@@ -613,14 +613,27 @@ export class ScionPageGroveDetail extends LitElement {
     const updatedAgents = stateManager.getAgents();
     // Merge SSE agent deltas into local agent list
     const agentMap = new Map(this.agents.map((a) => [a.id, a]));
+    // Lazily derive scope capabilities from existing agents if not yet set.
+    if (!this.agentScopeCapabilities) {
+      for (const a of agentMap.values()) {
+        if (a._capabilities) {
+          this.agentScopeCapabilities = a._capabilities;
+          break;
+        }
+      }
+    }
     for (const agent of updatedAgents) {
       if (agent.groveId === this.groveId || agentMap.has(agent.id)) {
         const existing = agentMap.get(agent.id);
         const merged = { ...existing, ...agent } as Agent;
         // New agents from SSE don't carry per-resource _capabilities.
         // Inherit scope-level capabilities so action buttons render.
-        if (!merged._capabilities && this.agentScopeCapabilities) {
-          merged._capabilities = this.agentScopeCapabilities;
+        if (!merged._capabilities) {
+          if (existing?._capabilities) {
+            merged._capabilities = existing._capabilities;
+          } else if (this.agentScopeCapabilities) {
+            merged._capabilities = this.agentScopeCapabilities;
+          }
         }
         agentMap.set(agent.id, merged);
       }
@@ -668,6 +681,11 @@ export class ScionPageGroveDetail extends LitElement {
         } else {
           this.agents = agentsData.agents || [];
           this.agentScopeCapabilities = agentsData._capabilities;
+        }
+        // Derive scope capabilities from per-agent capabilities when the
+        // response doesn't include a top-level _capabilities field.
+        if (!this.agentScopeCapabilities) {
+          this.agentScopeCapabilities = this.agents.find(a => a._capabilities)?._capabilities;
         }
       } else {
         // Fallback: if grove-scoped agents endpoint fails, try filtering from all agents
@@ -722,6 +740,9 @@ export class ScionPageGroveDetail extends LitElement {
     } else {
       this.agents = data.agents || [];
       this.agentScopeCapabilities = data._capabilities;
+    }
+    if (!this.agentScopeCapabilities) {
+      this.agentScopeCapabilities = this.agents.find(a => a._capabilities)?._capabilities;
     }
     stateManager.seedAgents(this.agents);
   }
@@ -890,11 +911,15 @@ export class ScionPageGroveDetail extends LitElement {
   }
 
   private async handleStopAll(): Promise<void> {
-    if (!confirm('Are you sure you want to stop all running agents in this grove?')) {
+    const isGroveAdmin = can(this.grove?._capabilities, 'manage');
+    const confirmMsg = isGroveAdmin
+      ? 'Are you sure you want to stop all running agents in this grove?'
+      : 'Are you sure you want to stop all of your running agents in this grove?';
+    if (!confirm(confirmMsg)) {
       return;
     }
 
-    // Optimistic: mark all running agents as "stopping"
+    // Optimistic: mark running agents as "stopping"
     this.agents = this.agents.map(a =>
       isAgentRunning(a) ? { ...a, phase: 'stopping' as const } : a
     );
@@ -906,18 +931,18 @@ export class ScionPageGroveDetail extends LitElement {
       });
 
       if (!response.ok) {
-        throw new Error(await extractApiError(response, 'Failed to stop all agents'));
+        throw new Error(await extractApiError(response, 'Failed to stop agents'));
       }
 
-      const result = (await response.json()) as { stopped: number; failed: number };
+      const result = (await response.json()) as { stopped: number; failed: number; scope?: string };
       if (result.failed > 0) {
         alert(`Stopped ${result.stopped} agents, ${result.failed} failed.`);
       }
 
       this.backgroundRefresh();
     } catch (err) {
-      console.error('Failed to stop all agents:', err);
-      alert(err instanceof Error ? err.message : 'Failed to stop all agents');
+      console.error('Failed to stop agents:', err);
+      alert(err instanceof Error ? err.message : 'Failed to stop agents');
       this.backgroundRefresh();
     } finally {
       this.stopAllLoading = false;

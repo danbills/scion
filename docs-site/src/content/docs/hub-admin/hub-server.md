@@ -85,9 +85,79 @@ server:
 ```
 The token is written to `~/.scion/dev-token` on startup. The CLI and Web Dashboard automatically detect this token when running on the same machine.
 
-### API Keys (Programmatic)
-**NOT IMPLEMENTED**
-The Hub supports long-lived API keys for CI/CD or other programmatic integrations.
+### Personal Access Tokens (Programmatic)
+
+The Hub supports long-lived Personal Access Tokens (PATs) for CI/CD or other programmatic integrations.
+
+## GCP Identity & Hub-Minted Service Accounts
+
+The Scion Hub can manage and provision Google Cloud Platform (GCP) Service Accounts directly. This allows agents to authenticate to Google Cloud services via metadata server emulation, avoiding the need to distribute static credential files. 
+
+### Configuration
+
+To enable GCP identity management, the Hub itself must run with a GCP identity (e.g., attached to its GCE instance or GKE pod) that has the `iam.serviceAccounts.getAccessToken` permission for the target Service Accounts.
+
+Administrators can configure Service Accounts via the Web Dashboard:
+1. Navigate to the **Service Accounts** section in the Admin dashboard.
+2. View the service account quota dashboard and configure minting capability controls.
+3. Register existing GCP Service Accounts by email, or configure the Hub to mint new ones dynamically.
+
+### Default Grove Identities
+
+Groves can be configured with default GCP identities that are automatically verified upon registration and automatically applied in the agent creation form. 
+
+### Security & Authorization
+
+Administrative actions for GCP Service Account management require `grove-owner` (`ActionManage`) permissions to enforce strict security boundaries. Direct API access to Hub secrets from agents is explicitly blocked to prevent credential leakage.
+
+For more details on how agents assume these identities via metadata server emulation, see the [Authentication Guide](/scion/hub-admin/auth/#gcp-identity--metadata-emulation).
+
+## Grove Settings & Agent Limits
+
+The Hub provides a comprehensive UI for configuring grove-level settings, ensuring administrators have control over resource allocation and project configurations. Access these settings via the Web Dashboard for any grove you manage.
+
+### Configuration Tabs
+
+The Grove Settings UI is organized into three primary tabs:
+
+- **General**: Configure the grove's display name, description, and template sync settings. For git-backed groves, you can specify default branches. For hub-native groves, you can configure external git repositories to load templates from.
+- **Limits**: Define constraints on agent execution to prevent resource exhaustion.
+  - **Hub-level Defaults**: Administrators can configure global default limits that apply to all groves.
+  - **Grove-level Limits**: Overrides can be set per-grove.
+  - Limits automatically pre-populate the agent creation form and restrict maximum concurrency, runtime duration, and storage.
+- **Resources**: Manage the compute and plugin environments available to the grove.
+  - **Runtime Brokers**: Link and manage the auxiliary runtimes (e.g., specific Kubernetes clusters or remote Docker hosts) authorized to execute agents for this grove.
+  - **Plugins**: Enable and configure message broker plugins or other extensions for agents running within the grove.
+
+### Template Synchronization
+
+Groves support loading templates from external Git repositories, which is especially useful for non-Git-backed (hub-native) groves. The UI accepts bare host/org/repo URLs (e.g., `github.com/org/repo`) and automatically normalizes them, appending `/.scion/templates/` unless a deeper path is specified. This synchronization can be manually triggered via the UI to immediately pull the latest templates.
+
+## Server Maintenance & Updates
+
+The Scion Hub provides a built-in maintenance administration panel in the Web Dashboard for managing routine server operations, updates, and synchronization.
+
+### Maintenance Panel Operations
+
+Administrators can trigger critical infrastructure operations directly from the dashboard:
+
+- **Check for Updates**: Checks for available updates and allows administrators to execute an "Update Now" action to perform a direct server rebuild.
+- **Rebuild Server (`rebuild-server`)**: Initiates a fire-and-forget server rebuild and restart sequence. It uses staging paths and sudoers implementation to ensure reliable updates even while the server is running.
+- **Rebuild Web (`rebuild-web`)**: Recompiles the web frontend assets.
+- **Pull Images (`pull-images`)**: Triggers the Docker/Podman executor to pull the latest agent container images.
+
+### Operation Execution & History
+
+All maintenance tasks executed through the panel are tracked. The maintenance interface provides:
+- Real-time log capture for active operations.
+- Execution history detailing operation duration, completion status, and log archives.
+- Automated cleanup of stalled operations during server startup.
+
+### WebDAV Synchronization
+
+The Hub provides robust WebDAV endpoints for transparent file access across native, shared, and remote linked groves.
+- WebDAV synchronization utilizes checksum comparisons for reliable file transfers.
+- A local storage HTTP proxy facilitates efficient remote file synchronization.
 
 ## Persistence
 
@@ -131,6 +201,19 @@ The Hub is designed to be stateless and is highly compatible with Google Cloud R
 - Use **Cloud SQL** (PostgreSQL) for the database.
 - Use **Cloud Storage** for template persistence.
 - Connect the Hub to Cloud SQL using the Cloud SQL Auth Proxy or a VPC connector.
+
+## Discord Integration
+
+The Hub supports native Discord webhooks to broadcast persistent agent messages, notifications, and `ask_user` requests to a Discord channel.
+
+To configure Discord notifications, set the `discord_webhook_url` in your `server` configuration block (or via the `SCION_DISCORD_WEBHOOK_URL` environment variable):
+
+```yaml
+server:
+  discord_webhook_url: "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN"
+```
+
+Once configured, the Hub will automatically forward messages with severity-based color coding. Urgent messages or explicit requests for user input can also trigger role or user mentions, ensuring that critical requests receive immediate attention.
 
 ## Observability
 

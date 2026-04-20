@@ -21,6 +21,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/GoogleCloudPlatform/scion/pkg/config"
 	"github.com/GoogleCloudPlatform/scion/pkg/util"
 )
 
@@ -119,6 +120,66 @@ func TestDeleteAgentFiles_CleansStaleWorktree(t *testing.T) {
 	// Verify agent directory was removed
 	if _, err := os.Stat(agentDir); !os.IsNotExist(err) {
 		t.Errorf("expected agent directory to be removed")
+	}
+}
+
+// TestDeleteAgentFiles_CleansSharedWorkspaceExternalState verifies that for
+// shared-workspace git groves (whose per-agent state lives outside the grove
+// tree per .design/hub-shared-workspace-isolation.md), DeleteAgentFiles
+// removes the external <grove-configs>/<slug>__<uuid>/.scion/agents/<name>
+// directory in addition to any in-grove residue.
+func TestDeleteAgentFiles_CleansSharedWorkspaceExternalState(t *testing.T) {
+	t.Setenv("SCION_HOST_UID", "")
+	tmpDir := t.TempDir()
+
+	oldWd, _ := os.Getwd()
+	defer os.Chdir(oldWd)
+	os.Chdir(tmpDir)
+
+	originalHome := os.Getenv("HOME")
+	defer os.Setenv("HOME", originalHome)
+	os.Setenv("HOME", tmpDir)
+
+	// Set up a project with .scion + grove-id (split-storage marker).
+	projectDir := filepath.Join(tmpDir, "project")
+	os.MkdirAll(projectDir, 0755)
+	setupGitRepo(t, projectDir)
+
+	scionDir := filepath.Join(projectDir, ".scion")
+	os.MkdirAll(scionDir, 0755)
+	if err := config.WriteGroveID(scionDir, "550e8400-e29b-41d4-a716-446655440000"); err != nil {
+		t.Fatalf("WriteGroveID failed: %v", err)
+	}
+
+	agentName := "shared-agent"
+
+	// Resolve the external dir the same way production code does.
+	extAgentsDir, err := config.GetGitGroveExternalAgentsDir(scionDir)
+	if err != nil || extAgentsDir == "" {
+		t.Fatalf("GetGitGroveExternalAgentsDir: dir=%q err=%v", extAgentsDir, err)
+	}
+	extAgentDir := filepath.Join(extAgentsDir, agentName)
+	if err := os.MkdirAll(extAgentDir, 0755); err != nil {
+		t.Fatalf("mkdir extAgentDir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(extAgentDir, "prompt.md"), []byte("task"), 0644); err != nil {
+		t.Fatalf("write prompt.md: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(extAgentDir, "scion-agent.json"), []byte(`{}`), 0644); err != nil {
+		t.Fatalf("write scion-agent.json: %v", err)
+	}
+	// Also seed an external home/ subdir to mirror real layout.
+	if err := os.MkdirAll(filepath.Join(extAgentDir, "home"), 0755); err != nil {
+		t.Fatalf("mkdir home: %v", err)
+	}
+
+	// DeleteAgentFiles takes grovePath; pass scionDir like real callers do.
+	if _, err := DeleteAgentFiles(agentName, scionDir, false); err != nil {
+		t.Fatalf("DeleteAgentFiles failed: %v", err)
+	}
+
+	if _, err := os.Stat(extAgentDir); !os.IsNotExist(err) {
+		t.Errorf("expected external agent dir %s to be removed, stat err=%v", extAgentDir, err)
 	}
 }
 

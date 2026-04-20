@@ -30,10 +30,13 @@ When you are attached to an agent, you interact with `tmux` using a **prefix key
 
 The Scion Web Dashboard provides a built-in terminal interface for agents that fully supports Tmux. This Web Terminal includes:
 - **Toolbar Integration**: Visual buttons to easily send common Tmux sequences like detach, split panes, or enter scroll mode.
-- **Window Toggles**: Toolbar controls for managing tmux windows, allowing you to seamlessly switch between the agent session and a shell window. These controls use direct tmux key bindings for reliability.
-- **Mouse & Text Selection Together**: Tmux mouse mode stays enabled for scroll wheel and pane interactions. To select text in the browser without disabling mouse mode, hold `Shift` while dragging. On macOS, `Option`-drag also works.
+- **Window Toggles**: Redesigned, wider toolbar controls for managing tmux windows seamlessly switch between the agent session and a standard shell window. These controls use direct tmux key bindings for maximum reliability.
+- **Mouse & Text Selection Together**: Tmux mouse mode stays enabled for scroll wheel and pane interactions. To select text in the browser without disabling mouse mode, hold `Shift` while dragging. On macOS, `Option`-drag also works. 
 - **Persistent Copy-Paste**: Improved clipboard handling ensures reliable copy and paste interactions, including proper mouse-drag text selection within the web-based Tmux session.
 - **Optional Mouse Toggle**: The toolbar still exposes explicit mouse on/off controls if you want plain browser drag selection without a modifier.
+- **Automatic Window Sizing**: The web terminal automatically adjusts the tmux window size upon attachment, ensuring immediate terminal redrawing to fit your browser's dimensions.
+- **Extended Key Sequences**: Native support for extended key sequences (`CSI u`), ensuring combinations like `Shift+Enter` are correctly forwarded to modern CLI tools.
+- **Standardized Environment**: PTY sessions automatically enforce `TERM=xterm-256color` for consistent color and feature support across all shells.
 
 ## Customizing Your Session
 

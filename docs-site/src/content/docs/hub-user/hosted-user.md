@@ -31,7 +31,7 @@ hub:
 Once the endpoint is configured, authenticate your CLI:
 
 ```bash
-scion hub auth login
+scion auth login
 ```
 
 This will open your browser to complete the OAuth flow.
